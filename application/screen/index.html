@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Reception Screen</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <main class="stage">
+    <section class="director-panel">
+      <div class="panel-card">
+        <p class="eyebrow">Screen Control</p>
+        <h1>Reception Phone UI</h1>
+        <p class="panel-copy">
+          動画撮影用のスマホ画面です。検知、認識、傾聴、会話の各状態を即座に切り替えられます。
+        </p>
+        <div class="state-grid">
+          <button class="state-button is-active" data-set-state="idle">待機</button>
+          <button class="state-button" data-set-state="detecting">人物検知</button>
+          <button class="state-button" data-set-state="recognized">顔認識</button>
+          <button class="state-button" data-set-state="listening">AIが聞く</button>
+          <button class="state-button" data-set-state="thinking">考え中</button>
+          <button class="state-button" data-set-state="speaking">AIが話す</button>
+          <button class="state-button" data-set-state="farewell">見送り</button>
+        </div>
+        <div class="action-row">
+          <button class="ghost-button" id="run-demo">デモ再生</button>
+          <button class="ghost-button" id="toggle-overlay">操作を隠す</button>
+        </div>
+        <p class="panel-note">ショートカット: `1`-`7` で状態切替、`D` でデモ再生</p>
+      </div>
+    </section>
+
+    <section class="phone-shell" aria-label="smartphone screen mockup">
+      <div class="phone-frame">
+        <div class="phone-screen" data-state="idle">
+          <div class="status-bar">
+            <span>9:41</span>
+            <span>Reception AI</span>
+            <span>5G 92%</span>
+          </div>
+
+          <div class="ambient ambient-left"></div>
+          <div class="ambient ambient-right"></div>
+          <div class="scanline"></div>
+
+          <header class="hero">
+            <div class="hero-copy">
+              <p class="eyebrow">Smart Reception</p>
+              <h2 id="hero-title">待機中</h2>
+              <p id="hero-subtitle">人が近づくと検知を開始します。</p>
+            </div>
+            <div class="state-pill" id="state-pill">IDLE</div>
+          </header>
+
+          <section class="avatar-zone">
+            <div class="halo halo-outer"></div>
+            <div class="halo halo-middle"></div>
+            <div class="halo halo-inner"></div>
+
+            <div class="assistant-face" id="assistant-face" aria-hidden="true">
+              <div class="brow brow-left"></div>
+              <div class="brow brow-right"></div>
+              <div class="eye eye-left">
+                <span class="eye-core"></span>
+              </div>
+              <div class="eye eye-right">
+                <span class="eye-core"></span>
+              </div>
+              <div class="cheek cheek-left"></div>
+              <div class="cheek cheek-right"></div>
+              <div class="mouth">
+                <span class="mouth-shape"></span>
+              </div>
+              <div class="voice-bars">
+                <span></span><span></span><span></span><span></span><span></span>
+              </div>
+            </div>
+
+            <div class="orbit-text" id="orbit-text">STANDBY</div>
+          </section>
+
+          <section class="feed-card">
+            <div class="feed-head">
+              <span class="feed-title">Recognition Feed</span>
+              <span class="feed-badge" id="feed-badge">No Target</span>
+            </div>
+            <div class="feed-body">
+              <div class="feed-camera">
+                <div class="corner tl"></div>
+                <div class="corner tr"></div>
+                <div class="corner bl"></div>
+                <div class="corner br"></div>
+                <div class="target-box" id="target-box"></div>
+                <div class="target-label" id="target-label">searching...</div>
+              </div>
+              <div class="feed-meta">
+                <div class="meta-row">
+                  <span class="meta-key">Target</span>
+                  <span class="meta-value" id="meta-target">未検知</span>
+                </div>
+                <div class="meta-row">
+                  <span class="meta-key">Identity</span>
+                  <span class="meta-value" id="meta-identity">Unknown</span>
+                </div>
+                <div class="meta-row">
+                  <span class="meta-key">Mode</span>
+                  <span class="meta-value" id="meta-mode">Standby</span>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="dialogue-card">
+            <div class="dialogue-head">
+              <span>Live Dialogue</span>
+              <span id="dialogue-stage">Waiting</span>
+            </div>
+            <div class="bubble bubble-user" id="bubble-user">......</div>
+            <div class="bubble bubble-ai" id="bubble-ai">受付の準備ができています。</div>
+          </section>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="./app.js"></script>
+</body>
+</html>

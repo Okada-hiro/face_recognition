@@ -156,6 +156,8 @@ async def tts_debug_page():
 # --- ヘルパー: 音声処理パイプライン ---
 async def process_voice_pipeline(audio_float32_np, websocket: WebSocket, chat_history: list):
     global NEXT_AUDIO_IS_REGISTRATION
+    pipeline_start = time.perf_counter()
+    duration_sec = len(audio_float32_np) / 16000.0
 
     # --- ★追加: 自分の声を保存して確認できるようにする ---
     import soundfile as sf
@@ -178,12 +180,19 @@ async def process_voice_pipeline(audio_float32_np, websocket: WebSocket, chat_hi
     # 1. 話者判定 / 登録ロジック
     # ---------------------------
     if NEXT_AUDIO_IS_REGISTRATION:
+        registration_start = time.perf_counter()
         temp_reg_path = f"{PROCESSING_DIR}/reg_{id(audio_float32_np)}.wav"
         import soundfile as sf
         sf.write(temp_reg_path, audio_float32_np, 16000)
         
         new_id = await asyncio.to_thread(speaker_guard.register_new_speaker, temp_reg_path)
         NEXT_AUDIO_IS_REGISTRATION = False 
+        logger.info(
+            "[PIPELINE_TIMING] stage=register_speaker duration_s=%.2f total_ms=%.1f speaker_id=%s",
+            duration_sec,
+            (time.perf_counter() - registration_start) * 1000.0,
+            new_id,
+        )
         
         if new_id:
             speaker_id = new_id
@@ -194,8 +203,16 @@ async def process_voice_pipeline(audio_float32_np, websocket: WebSocket, chat_hi
             return
             
     else:
+        identify_start = time.perf_counter()
         is_allowed, detected_id = await asyncio.to_thread(speaker_guard.identify_speaker, voice_tensor)
         speaker_id = detected_id
+        logger.info(
+            "[PIPELINE_TIMING] stage=identify_speaker duration_s=%.2f total_ms=%.1f allowed=%s speaker_id=%s",
+            duration_sec,
+            (time.perf_counter() - identify_start) * 1000.0,
+            is_allowed,
+            speaker_id,
+        )
 
     # ---------------------------
     #  2. アクセス制御
@@ -227,12 +244,23 @@ async def process_voice_pipeline(audio_float32_np, websocket: WebSocket, chat_hi
             raise ValueError("Whisper Model not loaded")
 
         logger.info("[TASK] 文字起こし開始")
+        transcribe_start = time.perf_counter()
         segments = await asyncio.to_thread(
             GLOBAL_ASR_MODEL_INSTANCE.transcribe, 
             audio_float32_np
         )
+        transcribe_ms = (time.perf_counter() - transcribe_start) * 1000.0
         
+        ts_words_start = time.perf_counter()
         text = "".join([s[2] for s in GLOBAL_ASR_MODEL_INSTANCE.ts_words(segments)])
+        ts_words_ms = (time.perf_counter() - ts_words_start) * 1000.0
+        logger.info(
+            "[PIPELINE_TIMING] stage=asr_done duration_s=%.2f transcribe_ms=%.1f ts_words_ms=%.1f text_len=%d",
+            duration_sec,
+            transcribe_ms,
+            ts_words_ms,
+            len(text.strip()),
+        )
         
         if not text.strip():
             logger.info("[TASK] 空の認識結果")
@@ -250,7 +278,18 @@ async def process_voice_pipeline(audio_float32_np, websocket: WebSocket, chat_hi
         # ---------------------------
         # 4. LLM & TTS ストリーミング
         # ---------------------------
+        llm_tts_start = time.perf_counter()
         await handle_llm_tts(text_with_context, websocket, chat_history)
+        logger.info(
+            "[PIPELINE_TIMING] stage=llm_tts_done duration_s=%.2f total_ms=%.1f",
+            duration_sec,
+            (time.perf_counter() - llm_tts_start) * 1000.0,
+        )
+        logger.info(
+            "[PIPELINE_TIMING] stage=pipeline_done duration_s=%.2f total_ms=%.1f",
+            duration_sec,
+            (time.perf_counter() - pipeline_start) * 1000.0,
+        )
 
     except Exception as e:
         logger.error(f"Pipeline Error: {e}", exc_info=True)

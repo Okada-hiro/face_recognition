@@ -46,12 +46,12 @@ git clone https://github.com/ufal/whisper_streaming.git
 ```
 4. ref_audio(参考音声)を指定してください。
 ```bash
-export QWEN3_REF_AUDIO=ref_audio.WAV
+export QWEN3_REF_AUDIO=/workspace/face_recognition/lab_voice_talk/ref_audio.WAV
 ```
 
 5. ref_text(参考テキスト)を指定してください。
 ```bash
- export QWEN3_REF_TEXT="$(cat /workspace/lab_voice_talk/ref_text.txt)"
+ export QWEN3_REF_TEXT="$(cat /workspace/face_recognition/lab_voice_talk/ref_text.txt)"
 ```
 6. qwen3ttsの挙動を安定化させます。以下のコマンドを実行してください。
 ```bash

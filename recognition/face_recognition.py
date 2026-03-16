@@ -20,9 +20,13 @@ def cosine_distance(a: np.ndarray, b: np.ndarray) -> float:
 class InsightFaceAnalyzer:
     def __init__(self, config: AppConfig) -> None:
         try:
-            package_root = Path(__file__).resolve().parents[1] / "insightface" / "python-package"
-            if str(package_root) not in sys.path:
-                sys.path.insert(0, str(package_root))
+            repo_root = Path(__file__).resolve().parents[1]
+            blocked_paths = {
+                str(repo_root),
+                str(repo_root / "insightface"),
+                str(repo_root / "insightface" / "python-package"),
+            }
+            sys.path[:] = [path for path in sys.path if path not in blocked_paths]
             import onnxruntime
             from insightface.app import FaceAnalysis
         except Exception as exc:

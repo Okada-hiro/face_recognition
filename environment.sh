@@ -117,20 +117,14 @@ python -m pip install --upgrade \
 
 echo "[6/7] Installing local repository packages..."
 python -m pip install --upgrade -e "$REPO_ROOT/ultralytics"
+python -m pip install --upgrade "$REPO_ROOT/insightface/python-package"
 
 echo "[7/7] Verifying imports and accelerator visibility..."
 python - <<'PY'
-import sys
-from pathlib import Path
-
 import onnxruntime
 import torch
+import insightface
 from ultralytics import YOLO
-
-repo_root = Path.cwd()
-insightface_root = repo_root / "insightface" / "python-package"
-if str(insightface_root) not in sys.path:
-    sys.path.insert(0, str(insightface_root))
 from insightface.app import FaceAnalysis
 
 print("torch", torch.__version__)
@@ -143,6 +137,7 @@ if torch.cuda.is_available():
 print("onnxruntime", onnxruntime.__version__)
 print("onnxruntime.providers", onnxruntime.get_available_providers())
 print("ultralytics", YOLO.__name__)
+print("insightface", insightface.__version__)
 print("insightface", FaceAnalysis.__name__)
 PY
 

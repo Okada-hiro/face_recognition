@@ -22,6 +22,47 @@ const bootNote = document.getElementById("boot-note");
 const debugPill = document.getElementById("live-debug-pill");
 const statusTime = document.getElementById("status-time");
 const netPill = document.getElementById("net-pill");
+const RECEPTION_CONFIG = window.RECEPTION_CONFIG || {};
+const DEFAULT_WS_PROTOCOL = window.location.protocol === "https:" ? "wss://" : "ws://";
+const DEFAULT_VOICE_WS_URL = `${DEFAULT_WS_PROTOCOL}${window.location.host}/ws`;
+const RUNPOD_PROXY_RE = /^(.*)-(\d+)\.proxy\.runpod\.net$/;
+
+function deriveProxyOrigin(targetPort) {
+  const { protocol, hostname, host, port } = window.location;
+  const match = hostname.match(RUNPOD_PROXY_RE);
+  if (match) {
+    return `${protocol}//${match[1]}-${targetPort}.proxy.runpod.net`;
+  }
+  if (port) {
+    return `${protocol}//${hostname}:${targetPort}`;
+  }
+  return `${protocol}//${host}`;
+}
+
+function normalizeVisionHttpBase(value) {
+  const raw = String(value || "").trim();
+  if (!raw) {
+    return deriveProxyOrigin(8000);
+  }
+  if (raw.startsWith("/")) {
+    return `${window.location.origin}${raw}`.replace(/\/$/, "");
+  }
+  return raw.replace(/\/$/, "");
+}
+
+function normalizeVoiceWsUrl(value) {
+  const raw = String(value || "").trim();
+  if (!raw) {
+    return `${DEFAULT_WS_PROTOCOL}${window.location.host}/voice-ws`;
+  }
+  if (raw.startsWith("/")) {
+    return `${DEFAULT_WS_PROTOCOL}${window.location.host}${raw}`;
+  }
+  return raw;
+}
+
+const VISION_HTTP_BASE = normalizeVisionHttpBase(RECEPTION_CONFIG.visionHttpBase);
+const VOICE_WS_URL = normalizeVoiceWsUrl(RECEPTION_CONFIG.voiceWsUrl);
 
 const STATES = {
   idle: {
@@ -333,8 +374,7 @@ async function processAudioQueue() {
 }
 
 async function connectVoiceSocket() {
-  const wsProtocol = window.location.protocol === "https:" ? "wss://" : "ws://";
-  const socket = new WebSocket(`${wsProtocol}${window.location.host}/ws`);
+  const socket = new WebSocket(VOICE_WS_URL || DEFAULT_VOICE_WS_URL);
   socket.binaryType = "arraybuffer";
 
   socket.onopen = () => {
@@ -431,6 +471,9 @@ async function initMedia() {
   };
   runtime.sourceInput.connect(runtime.processor);
   runtime.processor.connect(runtime.audioContext.destination);
+  if (runtime.audioContext.state === "suspended") {
+    await runtime.audioContext.resume();
+  }
 }
 
 async function captureAndSendFrame() {
@@ -447,7 +490,7 @@ async function captureAndSendFrame() {
     const blob = await new Promise((resolve) => captureCanvas.toBlob(resolve, "image/jpeg", 0.88));
     const form = new FormData();
     form.append("frame", blob, "frame.jpg");
-    const response = await fetch("/api/live-frame", { method: "POST", body: form });
+    const response = await fetch(`${VISION_HTTP_BASE}/api/live-frame`, { method: "POST", body: form });
     if (!response.ok) {
       throw new Error(await response.text());
     }
@@ -511,6 +554,9 @@ async function startApp() {
   try {
     await connectVoiceSocket();
     await initMedia();
+    if (runtime.audioContext && runtime.audioContext.state === "suspended") {
+      await runtime.audioContext.resume();
+    }
     runtime.started = true;
     bootOverlay.classList.add("is-hidden");
     queueBlink(3000 + Math.random() * 1000);
@@ -535,7 +581,7 @@ refreshVisualState();
 bootStartButton.addEventListener("click", startApp);
 window.addEventListener("beforeunload", stopRuntime);
 window.addEventListener("load", () => {
-  startApp().catch(() => {
-    bootStartButton.disabled = false;
-  });
+  bootCopy.textContent = "開始ボタンを押してカメラとマイクを有効化してください。";
+  bootNote.textContent = "音声再生を確実に有効化するため、最初の起動は手動で行います。";
+  bootStartButton.disabled = false;
 });

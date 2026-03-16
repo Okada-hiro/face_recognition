@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+git clone https://github.com/ufal/whisper_streaming.git
 set -e
 
 apt-get update
@@ -37,6 +38,6 @@ pip uninstall -y qwen-tts faster-qwen3-tts transformers huggingface_hub speechbr
 pip install "transformers==4.57.3" "qwen-tts==0.1.1"
 pip install "huggingface_hub<1.0" "speechbrain>=1.0.0"
 
-# 3) faster-qwen3-tts はローカルを優先（推奨）
-pip install -e /workspace/faster-qwen3-tts
+
+pip install /workspace/faster-qwen3-tts
 

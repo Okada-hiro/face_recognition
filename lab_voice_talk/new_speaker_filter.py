@@ -51,6 +51,7 @@ class SpeakerGuard:
         )
         
         self.known_speakers = [] 
+        self.auto_register_min_seconds = float(os.getenv("SPEAKER_AUTO_REGISTER_MIN_SECONDS", "1.5"))
         
         # ★閾値を変更★
         # 0.35(厳格) -> 0.25(実用的)
@@ -88,9 +89,16 @@ class SpeakerGuard:
         """
         try:
             current_embedding = self.extract_embedding(audio_tensor)
+            sample_count = int(audio_tensor.shape[-1]) if audio_tensor.ndim > 1 else int(audio_tensor.shape[0])
+            duration_sec = sample_count / 16000.0
             
             # まだ誰も登録されていない場合 -> 最初の1人を自動登録 (オーナー)
             if not self.known_speakers:
+                if duration_sec < self.auto_register_min_seconds:
+                    logger.info(
+                        f"🚫 [SpeakerGuard] 初回自動登録を見送り: 音声が短すぎます ({duration_sec:.2f}s < {self.auto_register_min_seconds:.2f}s)"
+                    )
+                    return False, "Unknown"
                 print("🔒 [SpeakerGuard] 最初の話者を 'User 0' (オーナー) として登録")
                 self.known_speakers.append({'id': 'User 0', 'emb': current_embedding})
                 return True, "User 0"

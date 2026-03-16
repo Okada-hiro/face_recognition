@@ -24,6 +24,7 @@ import sys
 import threading
 import wave
 from datetime import datetime
+import logging
 from pathlib import Path
 from urllib import request
 from urllib.parse import quote
@@ -32,7 +33,15 @@ import cv2
 import numpy as np
 import uvicorn
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, Response
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+ultralytics_root = REPO_ROOT / "ultralytics"
+if str(ultralytics_root) not in sys.path:
+    sys.path.insert(0, str(ultralytics_root))
 
 from recognition.config import AppConfig
 from recognition.pipeline import ReceptionMonitor
@@ -44,18 +53,31 @@ LIVE_PERSON_MODEL = os.getenv("RECOGNITION_LIVE_PERSON_MODEL", "yolo11n.pt")
 LIVE_DEVICE = os.getenv("RECOGNITION_LIVE_DEVICE", "auto")
 LIVE_DATABASE_DIR = Path(os.getenv("RECOGNITION_LIVE_DATABASE_DIR", ROOT_DIR.parent / "data_base")).resolve()
 LIVE_JPEG_QUALITY = int(os.getenv("RECOGNITION_LIVE_JPEG_QUALITY", "85"))
+YOLO_CONFIG_DIR = Path(os.getenv("YOLO_CONFIG_DIR", str((ROOT_DIR.parent / ".cache" / "Ultralytics").resolve()))).resolve()
 VOICE_TALK_DIR = (ROOT_DIR.parent / "lab_voice_talk").resolve()
 VOICE_TALK_NOTIFY_BASE = os.getenv("RECOGNITION_VOICE_TALK_NOTIFY_BASE", "http://127.0.0.1:8002").rstrip("/")
 VOICE_TALK_HTTP_BASE = os.getenv("RECOGNITION_VOICE_TALK_HTTP_BASE", VOICE_TALK_NOTIFY_BASE).rstrip("/")
 VOICE_TALK_WS_URL = os.getenv("RECOGNITION_VOICE_TALK_WS_URL", "ws://127.0.0.1:8002/ws")
+ENABLE_LOCAL_EVENT_TTS = os.getenv("RECOGNITION_ENABLE_LOCAL_EVENT_TTS", "0") == "1"
+
+os.environ.setdefault("YOLO_CONFIG_DIR", str(YOLO_CONFIG_DIR))
+YOLO_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 
 app = FastAPI(title=TITLE, version="1.0.0")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["x-frame-index", "x-track-events", "x-person-count", "x-face-count", "x-primary-person-id"],
+)
 _live_monitor_lock = threading.Lock()
 _live_monitor: ReceptionMonitor | None = None
 _live_frame_index = 0
 _voice_tts_lock = threading.Lock()
 _voice_tts_module = None
 _voice_tts_error: str | None = None
+logger = logging.getLogger("recognition_browser")
 
 
 def _resolve_relative_path(relative_path: str) -> Path:
@@ -265,7 +287,7 @@ def _render_file_page(target: Path) -> str:
 
 
 def _render_live_page() -> str:
-    return """<!doctype html>
+    html = """<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -411,6 +433,10 @@ def _render_live_page() -> str:
     }
 
     async function speakTrackEvent(event) {
+      const enabled = %LOCAL_EVENT_TTS_ENABLED%;
+      if (!enabled) {
+        return;
+      }
       const params = new URLSearchParams({
         event_type: event.event_type,
         track_id: String(event.track_id),
@@ -550,6 +576,7 @@ def _render_live_page() -> str:
   </script>
 </body>
 </html>"""
+    return html.replace("%LOCAL_EVENT_TTS_ENABLED%", "true" if ENABLE_LOCAL_EVENT_TTS else "false")
 
 
 def _render_reception_page() -> str:
@@ -624,11 +651,11 @@ def _render_reception_page() -> str:
       <div class="grid">
         <section>
           <h2>Vision</h2>
-          <iframe src="/live" allow="camera"></iframe>
+          <iframe src="/live" allow="camera *; autoplay *"></iframe>
         </section>
         <section>
           <h2>Voice</h2>
-          <iframe src="/voice-ui" allow="microphone"></iframe>
+          <iframe src="/voice-ui" allow="microphone *; autoplay *"></iframe>
         </section>
       </div>
     </div>
@@ -648,6 +675,11 @@ def _get_live_monitor() -> ReceptionMonitor:
         )
         _live_monitor = ReceptionMonitor(config)
     return _live_monitor
+
+
+def _warm_live_monitor() -> None:
+    monitor = _get_live_monitor()
+    monitor.warmup()
 
 
 def _get_voice_tts_module():
@@ -732,6 +764,17 @@ def _notify_voice_talk(track_events) -> None:
 @app.get("/health")
 async def health() -> dict[str, object]:
     return {"ok": True, "root": str(ROOT_DIR), "port": PORT}
+
+
+@app.on_event("startup")
+async def startup_event() -> None:
+    logger.info("[VISION] warming up reception monitor...")
+    loop = asyncio.get_running_loop()
+    try:
+        await loop.run_in_executor(None, _warm_live_monitor)
+        logger.info("[VISION] reception monitor warmup complete.")
+    except Exception as exc:
+        logger.exception("[VISION] reception monitor warmup failed: %s", exc)
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -831,6 +874,8 @@ async def live_frame(frame: UploadFile = File(...), save_snapshot: str = Form(de
 @app.get("/api/live-utterance")
 async def live_utterance(event_type: str, track_id: int, person_id: str | None = None) -> Response:
     del track_id
+    if not ENABLE_LOCAL_EVENT_TTS:
+        raise HTTPException(status_code=404, detail="local_event_tts_disabled")
     try:
         tts_module = _get_voice_tts_module()
     except RuntimeError as exc:

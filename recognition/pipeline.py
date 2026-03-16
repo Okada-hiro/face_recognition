@@ -29,6 +29,12 @@ class ReceptionMonitor:
         )
         self.track_identities: dict[int, str] = {}
 
+    def warmup(self) -> None:
+        # Trigger model downloads and a first inference before the first real visitor arrives.
+        blank = np.zeros((self.config.insightface_det_size, self.config.insightface_det_size, 3), dtype=np.uint8)
+        _ = self.person_detector.detect(blank)
+        _ = self.face_analyzer.detect_faces(blank)
+
     def process_frame(self, frame: np.ndarray, frame_index: int) -> tuple[np.ndarray, EventRecord]:
         person_candidates = self.person_detector.detect(frame)
         persons, track_events = self.tracker.update(person_candidates)

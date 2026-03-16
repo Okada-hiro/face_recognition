@@ -353,6 +353,12 @@ def _get_live_monitor() -> ReceptionMonitor:
     return _live_monitor
 
 
+def _warm_live_monitor() -> None:
+    with _live_monitor_lock:
+        monitor = _get_live_monitor()
+        monitor.warmup()
+
+
 async def _broadcast_json(payload: dict) -> None:
     async with WS_CLIENTS_LOCK:
         clients = list(WS_CLIENTS)
@@ -467,6 +473,12 @@ async def _handle_track_events(track_events) -> None:
 @app.on_event("startup")
 async def startup_event() -> None:
     await _ensure_greeting_pcm()
+    base.logger.info("[VISION] warming up reception monitor...")
+    try:
+        await asyncio.to_thread(_warm_live_monitor)
+        base.logger.info("[VISION] reception monitor warmup complete.")
+    except Exception as exc:
+        base.logger.error(f"[VISION] reception monitor warmup failed: {exc}", exc_info=True)
 
 
 @app.get("/", response_class=HTMLResponse)

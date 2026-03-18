@@ -195,6 +195,8 @@ const runtime = {
   nextStartTime: 0,
   currentSourceNode: null,
   jitterPrimed: false,
+  pendingGreeting: false,
+  unknownFaceFrames: 0,
 };
 
 function showDialogueNote(message) {
@@ -222,16 +224,40 @@ function handleTrackEvents(trackEvents) {
   for (const item of trackEvents) {
     if (!item || !item.event_type) continue;
     if (item.event_type === "approached") {
-      if (item.person_id) {
-        runtime.recognizedPersonId = item.person_id;
-      }
       sendRecognitionEvent("approach", item.person_id || null);
+      runtime.pendingGreeting = true;
+      runtime.unknownFaceFrames = 0;
     } else if (item.event_type === "left") {
       sendRecognitionEvent("leave", item.person_id || null);
+      runtime.pendingGreeting = false;
+      runtime.unknownFaceFrames = 0;
       if (!item.person_id || item.person_id === runtime.recognizedPersonId) {
         runtime.recognizedPersonId = null;
       }
     }
+  }
+}
+
+function updateGreetingDecision(primaryPersonId, faceCount, matchCount) {
+  if (!runtime.pendingGreeting) return;
+  if (primaryPersonId) {
+    runtime.recognizedPersonId = primaryPersonId;
+    sendRecognitionEvent("recognized_face", primaryPersonId);
+    runtime.pendingGreeting = false;
+    runtime.unknownFaceFrames = 0;
+    return;
+  }
+  if (faceCount > 0 && matchCount === 0) {
+    runtime.unknownFaceFrames += 1;
+    if (runtime.unknownFaceFrames >= 3) {
+      sendRecognitionEvent("unknown_face", null);
+      runtime.pendingGreeting = false;
+      runtime.unknownFaceFrames = 0;
+    }
+    return;
+  }
+  if (faceCount <= 0) {
+    runtime.unknownFaceFrames = 0;
   }
 }
 
@@ -548,11 +574,14 @@ async function captureAndSendFrame() {
     const imageBlob = await response.blob();
     feedImage.src = URL.createObjectURL(imageBlob);
     runtime.frameCount += 1;
+    const matchCount = Number(response.headers.get("x-match-count") || "0");
     runtime.latestPersonCount = Number(response.headers.get("x-person-count") || "0");
     runtime.latestFaceCount = Number(response.headers.get("x-face-count") || "0");
-    runtime.recognizedPersonId = response.headers.get("x-primary-person-id") || runtime.recognizedPersonId;
+    const primaryPersonId = response.headers.get("x-primary-person-id") || "";
+    runtime.recognizedPersonId = primaryPersonId || runtime.recognizedPersonId;
     runtime.latestTrackEvents = JSON.parse(response.headers.get("x-track-events") || "[]");
     handleTrackEvents(runtime.latestTrackEvents);
+    updateGreetingDecision(primaryPersonId, runtime.latestFaceCount, matchCount);
     runtime.latestIntervalMs = computeNextInterval(runtime.latestPersonCount, runtime.latestFaceCount);
     runtime.currentIdentity = runtime.recognizedPersonId || (runtime.latestFaceCount > 0 ? "Guest" : "Unknown");
     runtime.currentTarget =

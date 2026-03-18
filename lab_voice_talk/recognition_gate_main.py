@@ -1,4 +1,5 @@
 import asyncio
+import importlib
 import json
 import os
 import time
@@ -11,7 +12,9 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
-import parallel_faster_main as base
+VOICE_APP_MODE = os.getenv("RECOGNITION_VOICE_APP_MODE", "prod").strip().lower()
+BASE_MODULE_NAME = "sample_withface_main" if VOICE_APP_MODE == "sample" else "parallel_faster_main"
+base = importlib.import_module(BASE_MODULE_NAME)
 
 
 app = FastAPI()
@@ -21,6 +24,8 @@ app = FastAPI()
 class ActivationState:
     active: bool = False
     person_id: str | None = None
+    greeted: bool = False
+    recognition_pending: bool = False
 
 
 STATE = ActivationState()
@@ -30,10 +35,37 @@ WS_CLIENTS_LOCK = asyncio.Lock()
 GREETING_PCM_CACHE: dict[str, bytes] = {}
 ENABLE_BARGE_IN = os.getenv("RECOGNITION_ENABLE_BARGE_IN", "1") == "1"
 GREETING_TTS_WORKER_ID = int(os.getenv("RECOGNITION_GREETING_TTS_WORKER_ID", "0"))
+DEFAULT_KNOWN_GREETING_TEMPLATE = (
+    "おはようございます、{person_id}さん。"
+    if getattr(base, "IS_SAMPLE_MODE", False)
+    else "{person_id}さん、こんにちは。"
+)
+DEFAULT_UNKNOWN_GREETING_TEXT = "おはようございます。" if getattr(base, "IS_SAMPLE_MODE", False) else "こんにちは。"
+KNOWN_GREETING_TEMPLATE = os.getenv("RECOGNITION_GREETING_KNOWN_TEMPLATE", DEFAULT_KNOWN_GREETING_TEMPLATE)
+UNKNOWN_GREETING_TEXT = os.getenv("RECOGNITION_GREETING_UNKNOWN_TEXT", DEFAULT_UNKNOWN_GREETING_TEXT)
 
 
 class ApproachPayload(BaseModel):
     person_id: str | None = None
+
+
+def _set_next_audio_is_registration(enabled: bool) -> None:
+    if hasattr(base, "set_next_audio_is_registration"):
+        base.set_next_audio_is_registration(enabled)
+        return
+    setattr(base, "NEXT_AUDIO_IS_REGISTRATION", enabled)
+
+
+def _get_next_audio_is_registration() -> bool:
+    if hasattr(base, "get_next_audio_is_registration"):
+        return bool(base.get_next_audio_is_registration())
+    return bool(getattr(base, "NEXT_AUDIO_IS_REGISTRATION", False))
+
+
+def _create_voice_session_state():
+    if hasattr(base, "create_session_state"):
+        return base.create_session_state()
+    return []
 
 
 def _get_tts_model_count() -> int:
@@ -67,7 +99,7 @@ def _get_tts_snapshot(worker_id: int | None) -> dict | None:
 
 @app.post("/enable-registration")
 async def enable_registration():
-    base.NEXT_AUDIO_IS_REGISTRATION = True
+    _set_next_audio_is_registration(True)
     base.logger.info("【モード切替】次の発話を新規話者として登録します")
     await _broadcast_json({"status": "system_info", "message": "次の発話を新規話者として登録します。"})
     return JSONResponse({"message": "登録モード待機中"})
@@ -145,15 +177,22 @@ async def _speak_text_to_websocket(websocket: WebSocket, text: str) -> None:
     )
 
 
-async def _broadcast_greeting(person_id: str | None) -> None:
-    text = f"{person_id}さん、こんにちは。" if person_id else "こんにちは。"
+def _build_greeting_text(person_id: str | None, known_face: bool) -> str:
+    if known_face and person_id:
+        return KNOWN_GREETING_TEMPLATE.format(person_id=person_id)
+    return UNKNOWN_GREETING_TEXT
+
+
+async def _broadcast_greeting(person_id: str | None, known_face: bool) -> None:
+    text = _build_greeting_text(person_id, known_face)
     async with WS_CLIENTS_LOCK:
         clients = list(WS_CLIENTS)
     base.logger.info(
-        "[GREETING] broadcast text=%r clients=%d person_id=%s",
+        "[GREETING] broadcast text=%r clients=%d person_id=%s known_face=%s",
         text,
         len(clients),
         person_id,
+        known_face,
     )
     for websocket in clients:
         try:
@@ -163,32 +202,54 @@ async def _broadcast_greeting(person_id: str | None) -> None:
 
 
 async def _handle_approach(person_id: str | None) -> dict[str, object]:
-    start = time.perf_counter()
     async with STATE_LOCK:
-        was_active = STATE.active
         STATE.active = True
-        STATE.person_id = person_id
+        STATE.person_id = None
+        STATE.greeted = False
+        STATE.recognition_pending = True
     await _broadcast_json(
         {
             "status": "system_info",
-            "message": f"認識システムが接近を検知しました。person_id={person_id or 'unknown'}",
+            "message": "接近を検知しました。顔認証中です。",
         }
     )
-    if not was_active:
-        await _broadcast_greeting(person_id)
     base.logger.info(
-        "[APPROACH] handled person_id=%s was_active=%s total_ms=%.1f",
+        "[APPROACH] pending_face_recognition person_id=%s",
         person_id,
-        was_active,
-        (time.perf_counter() - start) * 1000.0,
     )
-    return {"ok": True, "active": True, "person_id": person_id}
+    return {"ok": True, "active": True, "person_id": None, "recognition_pending": True}
+
+
+async def _handle_face_recognition(person_id: str | None, known_face: bool) -> dict[str, object]:
+    async with STATE_LOCK:
+        if not STATE.active:
+            return {"ok": False, "active": False, "person_id": None, "reason": "inactive"}
+        if STATE.greeted:
+            return {"ok": True, "active": True, "person_id": STATE.person_id, "already_greeted": True}
+        STATE.person_id = person_id if known_face else None
+        STATE.greeted = True
+        STATE.recognition_pending = False
+    await _broadcast_json(
+        {
+            "status": "system_info",
+            "message": (
+                f"顔認証が完了しました。person_id={person_id}"
+                if known_face and person_id
+                else "顔認証が完了しました。"
+            ),
+        }
+    )
+    await _broadcast_greeting(person_id if known_face else None, known_face)
+    base.logger.info("[FACE_RESULT] known_face=%s person_id=%s", known_face, person_id)
+    return {"ok": True, "active": True, "person_id": person_id if known_face else None, "known_face": known_face}
 
 
 async def _handle_leave(person_id: str | None) -> dict[str, object]:
     async with STATE_LOCK:
         STATE.active = False
         STATE.person_id = person_id
+        STATE.greeted = False
+        STATE.recognition_pending = False
     await _broadcast_json(
         {
             "status": "system_info",
@@ -216,6 +277,10 @@ async def _handle_control_message(websocket: WebSocket, raw_text: str) -> None:
 
     if event_name == "approach":
         await _handle_approach(person_id)
+    elif event_name == "recognized_face":
+        await _handle_face_recognition(person_id, True)
+    elif event_name == "unknown_face":
+        await _handle_face_recognition(None, False)
     elif event_name == "leave":
         await _handle_leave(person_id)
     else:
@@ -226,14 +291,16 @@ async def _handle_control_message(websocket: WebSocket, raw_text: str) -> None:
 async def startup_diagnostics() -> None:
     worker_id = _resolve_greeting_worker_id()
     base.logger.info(
-        "[GATE] startup barge_in=%s greeting_worker_id=%s tts_model_count=%d",
+        "[GATE] startup mode=%s base=%s barge_in=%s greeting_worker_id=%s tts_model_count=%d",
+        VOICE_APP_MODE,
+        BASE_MODULE_NAME,
         ENABLE_BARGE_IN,
         worker_id,
         _get_tts_model_count(),
     )
     if worker_id is None:
         return
-    greeting_text = "こんにちは。"
+    greeting_text = UNKNOWN_GREETING_TEXT
     try:
         start = time.perf_counter()
         pcm_bytes = await asyncio.to_thread(base.synthesize_speech_to_memory_for_worker, greeting_text, worker_id)
@@ -294,7 +361,7 @@ async def websocket_endpoint(websocket: WebSocket):
     window_size_samples = 512
     sample_rate = 16000
     check_speaker_samples = 30000
-    chat_history = []
+    session_state = _create_voice_session_state()
 
     try:
         await websocket.send_json({"status": "system_info", "message": "認識システムからの接近待ちです。"})
@@ -343,7 +410,7 @@ async def websocket_endpoint(websocket: WebSocket):
                             else:
                                 await websocket.send_json({"status": "processing", "message": "🧠 AI思考中..."})
                                 pipeline_start = time.perf_counter()
-                                await base.process_voice_pipeline(full_audio, websocket, chat_history)
+                                await base.process_voice_pipeline(full_audio, websocket, session_state)
                                 base.logger.info(
                                     "[GATE_PIPELINE] process_voice_pipeline_done samples=%d duration_s=%.2f total_ms=%.1f",
                                     len(full_audio),
@@ -358,7 +425,7 @@ async def websocket_endpoint(websocket: WebSocket):
                         if (
                             ENABLE_BARGE_IN
                             and not interruption_triggered
-                            and not base.NEXT_AUDIO_IS_REGISTRATION
+                            and not _get_next_audio_is_registration()
                             and current_len > check_speaker_samples
                         ):
                             temp_audio = np.concatenate(audio_buffer)

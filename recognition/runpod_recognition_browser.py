@@ -775,6 +775,16 @@ def _notify_voice_talk(track_events) -> None:
             continue
 
 
+def _select_primary_person_id(event) -> str:
+    match_by_track = {match.source_track_id: match.person_id for match in event.matches if match.source_track_id is not None}
+    for person in event.persons:
+        if person.track_id in match_by_track:
+            return match_by_track[person.track_id]
+    if event.matches:
+        return event.matches[0].person_id
+    return ""
+
+
 @app.get("/health")
 async def health() -> dict[str, object]:
     return {"ok": True, "root": str(ROOT_DIR), "port": PORT}
@@ -874,6 +884,7 @@ async def live_frame(frame: UploadFile = File(...), save_snapshot: str = Form(de
         "x-match-count": str(len(event.matches)),
         "x-face-count": str(len(event.faces)),
         "x-person-count": str(len(event.persons)),
+        "x-primary-person-id": _select_primary_person_id(event),
         "x-track-events": json.dumps(
             [
                 {"track_id": item.track_id, "event_type": item.event_type, "person_id": item.person_id}

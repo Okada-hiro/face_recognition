@@ -4,6 +4,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV_DIR="${VENV_DIR:-$REPO_ROOT/.venv}"
 VOICE_PORT="${VOICE_PORT:-8002}"
+VOICE_APP_MODE="${RECOGNITION_VOICE_APP_MODE:-prod}"
 
 cd "$REPO_ROOT"
 
@@ -22,6 +23,7 @@ export PYTHONPATH="${REPO_ROOT}:${REPO_ROOT}/ultralytics${PYTHONPATH:+:${PYTHONP
 
 echo "Starting two-machine voice gate ..."
 echo "  port       : ${VOICE_PORT}"
+echo "  mode       : ${VOICE_APP_MODE}"
 echo "  ref audio  : ${QWEN3_REF_AUDIO}"
 echo
 

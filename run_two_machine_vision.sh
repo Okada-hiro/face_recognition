@@ -6,7 +6,6 @@ VENV_DIR="${VENV_DIR:-$REPO_ROOT/.venv}"
 RECEPTION_PORT="${RECEPTION_PORT:-8000}"
 FRONTEND_PORT="${FRONTEND_PORT:-8005}"
 
-: "${RECOGNITION_VOICE_TALK_NOTIFY_BASE:?Set RECOGNITION_VOICE_TALK_NOTIFY_BASE to the voice machine HTTP base, e.g. https://voice-host-8002.proxy.runpod.net}"
 : "${RECEPTION_BROWSER_VOICE_WS_URL:?Set RECEPTION_BROWSER_VOICE_WS_URL to the browser-facing voice websocket URL, e.g. wss://voice-host-8002.proxy.runpod.net/ws}"
 
 cd "$REPO_ROOT"
@@ -16,6 +15,7 @@ if [[ -f "$VENV_DIR/bin/activate" ]]; then
   source "$VENV_DIR/bin/activate"
 fi
 
+export RECOGNITION_VOICE_TALK_NOTIFY_BASE="${RECOGNITION_VOICE_TALK_NOTIFY_BASE:-}"
 export RECOGNITION_VOICE_TALK_HTTP_BASE="${RECOGNITION_VOICE_TALK_HTTP_BASE:-$RECOGNITION_VOICE_TALK_NOTIFY_BASE}"
 export RECOGNITION_VOICE_TALK_WS_URL="${RECOGNITION_VOICE_TALK_WS_URL:-$RECEPTION_BROWSER_VOICE_WS_URL}"
 export PYTHONPATH="${REPO_ROOT}:${REPO_ROOT}/ultralytics${PYTHONPATH:+:${PYTHONPATH}}"
@@ -77,7 +77,7 @@ echo
 echo "Two-machine vision/frontend stack is running."
 echo "  vision api          : http://127.0.0.1:${RECEPTION_PORT}"
 echo "  frontend            : http://127.0.0.1:${FRONTEND_PORT}/app"
-echo "  voice notify base   : ${RECOGNITION_VOICE_TALK_NOTIFY_BASE}"
+echo "  voice notify base   : ${RECOGNITION_VOICE_TALK_NOTIFY_BASE:-<disabled>}"
 echo "  browser voice ws    : ${RECEPTION_BROWSER_VOICE_WS_URL}"
 echo
 

@@ -10,6 +10,7 @@ const metaIdentity = document.getElementById("meta-identity");
 const metaMode = document.getElementById("meta-mode");
 const bubbleUser = document.getElementById("bubble-user");
 const bubbleAi = document.getElementById("bubble-ai");
+const dialogueNote = document.getElementById("dialogue-note");
 const dialogueStage = document.getElementById("dialogue-stage");
 const assistantFace = document.getElementById("assistant-face");
 const cameraVideo = document.getElementById("camera-video");
@@ -195,6 +196,44 @@ const runtime = {
   currentSourceNode: null,
   jitterPrimed: false,
 };
+
+function showDialogueNote(message) {
+  if (!dialogueNote) return;
+  const text = String(message || "").trim();
+  if (!text) {
+    dialogueNote.hidden = true;
+    dialogueNote.textContent = "";
+    return;
+  }
+  dialogueNote.hidden = false;
+  dialogueNote.textContent = text;
+}
+
+function sendRecognitionEvent(eventName, personId = null) {
+  if (!runtime.ws || runtime.ws.readyState !== WebSocket.OPEN) return;
+  runtime.ws.send(JSON.stringify({
+    type: "recognition_event",
+    event: eventName,
+    person_id: personId,
+  }));
+}
+
+function handleTrackEvents(trackEvents) {
+  for (const item of trackEvents) {
+    if (!item || !item.event_type) continue;
+    if (item.event_type === "approached") {
+      if (item.person_id) {
+        runtime.recognizedPersonId = item.person_id;
+      }
+      sendRecognitionEvent("approach", item.person_id || null);
+    } else if (item.event_type === "left") {
+      sendRecognitionEvent("leave", item.person_id || null);
+      if (!item.person_id || item.person_id === runtime.recognizedPersonId) {
+        runtime.recognizedPersonId = null;
+      }
+    }
+  }
+}
 
 function updateClock() {
   const now = new Date();
@@ -401,19 +440,23 @@ async function connectVoiceSocket() {
       if (data.message.includes("接近")) {
         runtime.recognizedPersonId = runtime.recognizedPersonId || runtime.currentIdentity;
       }
+      showDialogueNote("");
     } else if (data.status === "processing") {
       runtime.listening = data.message.includes("聞いています");
       runtime.thinking = data.message.includes("思考中");
       if (runtime.thinking) runtime.listening = false;
+      showDialogueNote("");
     } else if (data.status === "transcribed") {
       runtime.latestUserText = data.question_text || "……";
       runtime.listening = false;
       runtime.thinking = true;
+      showDialogueNote("");
     } else if (data.status === "reply_chunk") {
       runtime.speaking = true;
       runtime.thinking = false;
       runtime.currentAiBubbleText += data.text_chunk || "";
       runtime.latestAiText = runtime.currentAiBubbleText;
+      showDialogueNote("");
     } else if (data.status === "audio_chunk_meta") {
       runtime.audioMetaQueue.push(data);
     } else if (data.status === "audio_sentence_done") {
@@ -428,12 +471,20 @@ async function connectVoiceSocket() {
       }
       runtime.currentAiBubbleText = "";
       resetOrderedAudioState();
+      showDialogueNote("");
     } else if (data.status === "interrupt") {
       stopAudioPlayback();
       runtime.speaking = false;
     } else if (data.status === "ignored") {
       runtime.listening = false;
       runtime.thinking = false;
+      showDialogueNote(data.message || "会話が短すぎます。");
+    } else if (data.status === "system_alert") {
+      runtime.listening = false;
+      runtime.thinking = false;
+      showDialogueNote(data.message || "");
+    } else if (data.status === "error") {
+      showDialogueNote(data.message || "処理エラー");
     }
     refreshVisualState();
   };
@@ -501,6 +552,7 @@ async function captureAndSendFrame() {
     runtime.latestFaceCount = Number(response.headers.get("x-face-count") || "0");
     runtime.recognizedPersonId = response.headers.get("x-primary-person-id") || runtime.recognizedPersonId;
     runtime.latestTrackEvents = JSON.parse(response.headers.get("x-track-events") || "[]");
+    handleTrackEvents(runtime.latestTrackEvents);
     runtime.latestIntervalMs = computeNextInterval(runtime.latestPersonCount, runtime.latestFaceCount);
     runtime.currentIdentity = runtime.recognizedPersonId || (runtime.latestFaceCount > 0 ? "Guest" : "Unknown");
     runtime.currentTarget =

@@ -755,9 +755,23 @@ def _notify_voice_talk(track_events) -> None:
         payload = json.dumps({"person_id": track_event.person_id}, ensure_ascii=False).encode("utf-8")
         req = request.Request(endpoint, data=payload, headers={"content-type": "application/json"}, method="POST")
         try:
-            with request.urlopen(req, timeout=1.5):
-                pass
-        except Exception:
+            with request.urlopen(req, timeout=5.0) as response:
+                status_code = getattr(response, "status", None) or response.getcode()
+                logger.info(
+                    "[VOICE_NOTIFY] sent event=%s person_id=%s endpoint=%s status=%s",
+                    track_event.event_type,
+                    track_event.person_id,
+                    endpoint,
+                    status_code,
+                )
+        except Exception as exc:
+            logger.warning(
+                "[VOICE_NOTIFY] failed event=%s person_id=%s endpoint=%s err=%s",
+                track_event.event_type,
+                track_event.person_id,
+                endpoint,
+                exc,
+            )
             continue
 
 

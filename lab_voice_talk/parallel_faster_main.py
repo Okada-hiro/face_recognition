@@ -225,7 +225,7 @@ async def process_voice_pipeline(audio_float32_np, websocket: WebSocket, chat_hi
         # 警告を出さずに「無視」する。
         if duration_sec < 2.5:
             logger.info(f"[Ignored] Short audio ({duration_sec:.2f}s) failed auth. Treating as noise.")
-            await websocket.send_json({"status": "ignored", "message": "..."})
+            await websocket.send_json({"status": "ignored", "message": "会話が短すぎます。"})
             return
 
         logger.info("[Access Denied] 登録されていない話者です。")

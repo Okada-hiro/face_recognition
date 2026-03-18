@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import time
 from dataclasses import dataclass
@@ -161,6 +162,66 @@ async def _broadcast_greeting(person_id: str | None) -> None:
             pass
 
 
+async def _handle_approach(person_id: str | None) -> dict[str, object]:
+    start = time.perf_counter()
+    async with STATE_LOCK:
+        was_active = STATE.active
+        STATE.active = True
+        STATE.person_id = person_id
+    await _broadcast_json(
+        {
+            "status": "system_info",
+            "message": f"認識システムが接近を検知しました。person_id={person_id or 'unknown'}",
+        }
+    )
+    if not was_active:
+        await _broadcast_greeting(person_id)
+    base.logger.info(
+        "[APPROACH] handled person_id=%s was_active=%s total_ms=%.1f",
+        person_id,
+        was_active,
+        (time.perf_counter() - start) * 1000.0,
+    )
+    return {"ok": True, "active": True, "person_id": person_id}
+
+
+async def _handle_leave(person_id: str | None) -> dict[str, object]:
+    async with STATE_LOCK:
+        STATE.active = False
+        STATE.person_id = person_id
+    await _broadcast_json(
+        {
+            "status": "system_info",
+            "message": f"認識システムが離脱を検知しました。person_id={person_id or 'unknown'}",
+        }
+    )
+    base.logger.info("[LEAVE] handled person_id=%s", person_id)
+    return {"ok": True, "active": False, "person_id": person_id}
+
+
+async def _handle_control_message(websocket: WebSocket, raw_text: str) -> None:
+    try:
+        payload = json.loads(raw_text)
+    except Exception:
+        base.logger.warning("[WS_CONTROL] invalid_json text=%r", raw_text[:200])
+        return
+
+    if payload.get("type") != "recognition_event":
+        base.logger.info("[WS_CONTROL] ignored payload=%s", payload)
+        return
+
+    event_name = payload.get("event")
+    person_id = payload.get("person_id")
+    base.logger.info("[WS_CONTROL] event=%s person_id=%s client=%s", event_name, person_id, websocket.client)
+
+    if event_name == "approach":
+        await _handle_approach(person_id)
+    elif event_name == "leave":
+        await _handle_leave(person_id)
+    else:
+        base.logger.warning("[WS_CONTROL] unknown_event payload=%s", payload)
+
+
 @app.on_event("startup")
 async def startup_diagnostics() -> None:
     worker_id = _resolve_greeting_worker_id()
@@ -191,40 +252,12 @@ async def startup_diagnostics() -> None:
 
 @app.post("/recognition/approach")
 async def recognition_approach(payload: ApproachPayload) -> dict[str, object]:
-    start = time.perf_counter()
-    async with STATE_LOCK:
-        was_active = STATE.active
-        STATE.active = True
-        STATE.person_id = payload.person_id
-    await _broadcast_json(
-        {
-            "status": "system_info",
-            "message": f"認識システムが接近を検知しました。person_id={payload.person_id or 'unknown'}",
-        }
-    )
-    if not was_active:
-        await _broadcast_greeting(payload.person_id)
-    base.logger.info(
-        "[APPROACH] handled person_id=%s was_active=%s total_ms=%.1f",
-        payload.person_id,
-        was_active,
-        (time.perf_counter() - start) * 1000.0,
-    )
-    return {"ok": True, "active": True, "person_id": payload.person_id}
+    return await _handle_approach(payload.person_id)
 
 
 @app.post("/recognition/leave")
 async def recognition_leave(payload: ApproachPayload) -> dict[str, object]:
-    async with STATE_LOCK:
-        STATE.active = False
-        STATE.person_id = payload.person_id
-    await _broadcast_json(
-        {
-            "status": "system_info",
-            "message": f"認識システムが離脱を検知しました。person_id={payload.person_id or 'unknown'}",
-        }
-    )
-    return {"ok": True, "active": False, "person_id": payload.person_id}
+    return await _handle_leave(payload.person_id)
 
 
 @app.get("/recognition/state")
@@ -266,7 +299,16 @@ async def websocket_endpoint(websocket: WebSocket):
     try:
         await websocket.send_json({"status": "system_info", "message": "認識システムからの接近待ちです。"})
         while True:
-            data_bytes = await websocket.receive_bytes()
+            message = await websocket.receive()
+            if message.get("type") == "websocket.disconnect":
+                raise WebSocketDisconnect()
+            data_text = message.get("text")
+            if data_text is not None:
+                await _handle_control_message(websocket, data_text)
+                continue
+            data_bytes = message.get("bytes")
+            if data_bytes is None:
+                continue
             async with STATE_LOCK:
                 current_active = STATE.active
             if not current_active:
@@ -297,7 +339,7 @@ async def websocket_endpoint(websocket: WebSocket):
 
                             if len(full_audio) / sample_rate < 0.2:
                                 base.logger.info("Noise detected")
-                                await websocket.send_json({"status": "ignored", "message": "..."})
+                                await websocket.send_json({"status": "ignored", "message": "会話が短すぎます。"})
                             else:
                                 await websocket.send_json({"status": "processing", "message": "🧠 AI思考中..."})
                                 pipeline_start = time.perf_counter()

@@ -508,6 +508,14 @@ body.app-live {
   color: white;
 }
 
+.dialogue-note {
+  min-height: 18px;
+  margin-top: 10px;
+  color: rgba(255, 255, 255, 0.68);
+  font-size: 0.74rem;
+  line-height: 1.4;
+}
+
 .ambient {
   width: 200px;
   height: 200px;
@@ -722,6 +730,86 @@ body.app-live {
 .phone-screen[data-state="farewell"] .halo {
   border-color: rgba(255, 122, 122, 0.24);
 }
+
+.phone-screen.demo-eyes .assistant-face {
+  width: 280px;
+  height: 180px;
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+}
+
+.phone-screen.demo-eyes .brow,
+.phone-screen.demo-eyes .cheek,
+.phone-screen.demo-eyes .mouth,
+.phone-screen.demo-eyes .voice-bars {
+  display: none;
+}
+
+.phone-screen.demo-eyes .eye {
+  top: 18px;
+  width: 112px;
+  height: 142px;
+  border-radius: 52% 48% 50% 50% / 58% 44% 56% 42%;
+  background: #fff;
+  border: 10px solid #050505;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.08);
+  overflow: visible;
+  transform-origin: center 50%;
+}
+
+.phone-screen.demo-eyes .eye-left { left: 18px; }
+.phone-screen.demo-eyes .eye-right { right: 18px; }
+
+.phone-screen.demo-eyes .eye-core {
+  position: absolute;
+  left: 28px;
+  top: 18px;
+  width: 72px;
+  height: 102px;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 38% 26%, rgba(255,255,255,0.12), transparent 20%),
+    #050505;
+  box-shadow: none;
+}
+
+.phone-screen.demo-eyes .eye-shine {
+  position: absolute;
+  left: 18px;
+  top: 20px;
+  width: 34px;
+  height: 48px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.96);
+}
+
+.phone-screen.demo-eyes .assistant-face.is-blinking .eye {
+  transform: scaleY(0.08);
+}
+
+.phone-screen.demo-eyes .assistant-face.is-blinking .eye-core,
+.phone-screen.demo-eyes .assistant-face.is-blinking .eye-shine {
+  opacity: 0.12;
+}
+
+.phone-screen.demo-eyes[data-state="detecting"] .eye,
+.phone-screen.demo-eyes[data-state="listening"] .eye {
+  top: 16px;
+}
+
+.phone-screen.demo-eyes[data-state="detecting"] .eye-core {
+  animation: detectCore 1.7s ease-in-out infinite;
+}
+
+.phone-screen.demo-eyes[data-state="listening"] .eye-core {
+  animation: listeningLook 2.6s ease-in-out infinite;
+}
+
+.phone-screen.demo-eyes[data-state="thinking"] .eye-core {
+  animation: lookAround 2s ease-in-out infinite;
+}
+
 
 .director-panel.is-hidden {
   opacity: 0;

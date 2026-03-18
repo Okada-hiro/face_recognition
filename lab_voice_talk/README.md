@@ -81,6 +81,11 @@ export GOOGLE_API_KEY=your_api_key
 export SB_DISABLE_QUIRKS=disable_jit_profiling
 ```
 
+9. hugging_faceのトークン(ReadでOK)
+```bash
+export HF_TOKEN=your_api_token
+```
+
 9. 実行
 ```bash
 python parallel_faster_main.py

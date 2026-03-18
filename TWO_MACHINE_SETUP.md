@@ -30,16 +30,17 @@ bash run_two_machine_voice.sh
 ```bash
 cd /workspace/face_recognition
 source .venv/bin/activate
-export RECOGNITION_VOICE_TALK_NOTIFY_BASE="https://<machine-b>-8002.proxy.runpod.net"
-export RECOGNITION_VOICE_TALK_HTTP_BASE="https://<machine-b>-8002.proxy.runpod.net"
 export RECOGNITION_VOICE_TALK_WS_URL="wss://<machine-b>-8002.proxy.runpod.net/ws"
 export RECEPTION_BROWSER_VOICE_WS_URL="wss://<machine-b>-8002.proxy.runpod.net/ws"
 export RECEPTION_VISION_PUBLIC_BASE="https://<machine-a>-8000.proxy.runpod.net"
+unset RECOGNITION_VOICE_TALK_NOTIFY_BASE
+unset RECOGNITION_VOICE_TALK_HTTP_BASE
 bash run_two_machine_vision.sh
 ```
 
 ## Notes
 
 - In the two-machine setup, the browser connects directly to the voice machine websocket.
-- Machine A only sends `/recognition/approach` and `/recognition/leave` notifications to Machine B.
+- Preferred: the browser forwards `approached/left` events to Machine B over the existing voice websocket.
+- `RECOGNITION_VOICE_TALK_NOTIFY_BASE` is optional now. Leave it empty unless you explicitly want server-to-server HTTP notifications.
 - If you want the browser to use the frontend proxy instead, set `RECEPTION_BROWSER_VOICE_WS_URL="/voice-ws"` and set `RECEPTION_PROXY_UPSTREAM_WS_URL` on Machine A.

@@ -39,5 +39,5 @@ pip install "transformers==4.57.3" "qwen-tts==0.1.1"
 pip install "huggingface_hub<1.0" "speechbrain>=1.0.0"
 
 
-pip install /workspace/faster-qwen3-tts
+pip install faster-qwen3-tts
 

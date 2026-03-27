@@ -88,6 +88,7 @@ python -m pip install --upgrade \
   numpy \
   pillow \
   matplotlib \
+  python-multipart \
   pyyaml \
   requests \
   scipy \
@@ -113,7 +114,9 @@ python -m pip install --upgrade \
   scikit-image \
   albumentations \
   prettytable \
-  speechbrain
+  speechbrain \
+  ultralytics \
+  insightface \
 
 echo "[6/7] Installing local repository packages..."
 python -m pip install --upgrade -e "$REPO_ROOT/ultralytics"

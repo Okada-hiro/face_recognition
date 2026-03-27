@@ -27,6 +27,7 @@ const RECEPTION_CONFIG = window.RECEPTION_CONFIG || {};
 const DEFAULT_WS_PROTOCOL = window.location.protocol === "https:" ? "wss://" : "ws://";
 const DEFAULT_VOICE_WS_URL = `${DEFAULT_WS_PROTOCOL}${window.location.host}/ws`;
 const RUNPOD_PROXY_RE = /^(.*)-(\d+)\.proxy\.runpod\.net$/;
+let CONFIG_ERROR = "";
 
 function deriveProxyOrigin(targetPort) {
   const { protocol, hostname, host, port } = window.location;
@@ -42,120 +43,155 @@ function deriveProxyOrigin(targetPort) {
 
 function normalizeVisionHttpBase(value) {
   const raw = String(value || "").trim();
+  let candidate = "";
   if (!raw) {
-    return deriveProxyOrigin(8000);
+    candidate = deriveProxyOrigin(8000);
+  } else if (raw.startsWith("/")) {
+    candidate = `${window.location.origin}${raw}`.replace(/\/$/, "");
+  } else {
+    candidate = raw.replace(/\/$/, "");
   }
-  if (raw.startsWith("/")) {
-    return `${window.location.origin}${raw}`.replace(/\/$/, "");
+  let parsed;
+  try {
+    parsed = new URL(candidate);
+  } catch (error) {
+    throw new Error(`Invalid vision URL: ${candidate} (${error})`);
   }
-  return raw.replace(/\/$/, "");
+  if (!["http:", "https:"].includes(parsed.protocol)) {
+    throw new Error(`Invalid vision URL protocol: ${candidate}`);
+  }
+  return parsed.toString().replace(/\/$/, "");
 }
 
 function normalizeVoiceWsUrl(value) {
   const raw = String(value || "").trim();
+  let candidate = "";
   if (!raw) {
-    return `${DEFAULT_WS_PROTOCOL}${window.location.host}/voice-ws`;
+    candidate = `${DEFAULT_WS_PROTOCOL}${window.location.host}/voice-ws`;
+  } else if (raw.startsWith("/")) {
+    candidate = `${DEFAULT_WS_PROTOCOL}${window.location.host}${raw}`;
+  } else if (raw.startsWith("https://")) {
+    candidate = `wss://${raw.slice("https://".length)}`;
+  } else if (raw.startsWith("http://")) {
+    candidate = `ws://${raw.slice("http://".length)}`;
+  } else if (/^[A-Za-z0-9.-]+(?::\d+)?\/.*$/.test(raw)) {
+    candidate = `${DEFAULT_WS_PROTOCOL}${raw}`;
+  } else {
+    candidate = raw;
   }
-  if (raw.startsWith("/")) {
-    return `${DEFAULT_WS_PROTOCOL}${window.location.host}${raw}`;
+  let parsed;
+  try {
+    parsed = new URL(candidate);
+  } catch (error) {
+    throw new Error(`Invalid voice WS URL: ${candidate} (${error})`);
   }
-  return raw;
+  if (!["ws:", "wss:"].includes(parsed.protocol)) {
+    throw new Error(`Invalid voice WS URL protocol: ${candidate}`);
+  }
+  return parsed.toString();
 }
 
-const VISION_HTTP_BASE = normalizeVisionHttpBase(RECEPTION_CONFIG.visionHttpBase);
-const VOICE_WS_URL = normalizeVoiceWsUrl(RECEPTION_CONFIG.voiceWsUrl);
+let VISION_HTTP_BASE = "";
+let VOICE_WS_URL = "";
+try {
+  VISION_HTTP_BASE = normalizeVisionHttpBase(RECEPTION_CONFIG.visionHttpBase);
+  VOICE_WS_URL = normalizeVoiceWsUrl(RECEPTION_CONFIG.voiceWsUrl);
+} catch (error) {
+  CONFIG_ERROR = String(error);
+  console.error("[RECEPTION_CONFIG_ERROR]", error, RECEPTION_CONFIG);
+}
 
 const STATES = {
   idle: {
-    pill: "IDLE",
+    pill: "待機",
     title: "待機中",
     subtitle: "人が近づくと顔認識と会話を開始します。",
-    orbit: "STANDBY",
-    badge: "No Target",
+    orbit: "待機中",
+    badge: "対象なし",
     target: "未検知",
-    identity: "Unknown",
-    mode: "Standby",
+    identity: "未認識",
+    mode: "待機中",
     user: "……",
     ai: "受付の準備ができています。",
-    dialogue: "Waiting",
+    dialogue: "待機中",
   },
   detecting: {
-    pill: "SCAN",
+    pill: "検知",
     title: "人物を検知しました",
     subtitle: "前方の人物を追跡しています。",
-    orbit: "TRACKING",
-    badge: "Human Detected",
-    target: "1 Person",
-    identity: "Analyzing...",
-    mode: "Person Detection",
+    orbit: "追跡中",
+    badge: "人物検知",
+    target: "人物を追跡中",
+    identity: "照合中…",
+    mode: "人物検知",
     user: "……",
     ai: "人物を確認しています。",
-    dialogue: "Tracking",
+    dialogue: "追跡中",
   },
   recognized: {
-    pill: "MATCH",
+    pill: "一致",
     title: "顔認識に成功",
     subtitle: "社員データベースとの照合が完了しました。",
-    orbit: "IDENTITY LOCK",
-    badge: "Face Recognized",
-    target: "Face Locked",
-    identity: "Recognized",
-    mode: "Face Recognition",
+    orbit: "照合完了",
+    badge: "顔を認識",
+    target: "対象を特定",
+    identity: "認識済み",
+    mode: "顔認識",
     user: "……",
     ai: "こんにちは。",
-    dialogue: "Matched",
+    dialogue: "認識完了",
   },
   listening: {
-    pill: "LISTEN",
+    pill: "傾聴",
     title: "AIが聞いています",
     subtitle: "用件を音声で受け付けています。",
-    orbit: "LISTENING",
-    badge: "Mic Active",
-    target: "Speaking User",
-    identity: "Recognized",
-    mode: "Speech Input",
+    orbit: "音声受付",
+    badge: "音声入力",
+    target: "発話中",
+    identity: "認識済み",
+    mode: "音声入力",
     user: "……",
     ai: "……",
-    dialogue: "Listening",
+    dialogue: "聞き取り中",
   },
   thinking: {
-    pill: "THINK",
+    pill: "応答",
     title: "回答を考えています",
     subtitle: "音声と認識情報をもとに返答を生成しています。",
-    orbit: "REASONING",
-    badge: "Processing",
-    target: "Context Ready",
-    identity: "Recognized",
-    mode: "Response Planning",
+    orbit: "応答生成",
+    badge: "処理中",
+    target: "文脈を整理",
+    identity: "認識済み",
+    mode: "回答生成",
     user: "……",
     ai: "少々お待ちください。",
-    dialogue: "Thinking",
+    dialogue: "考え中",
   },
   speaking: {
-    pill: "SPEAK",
+    pill: "発話",
     title: "AIが話しています",
     subtitle: "案内内容を音声で返答しています。",
-    orbit: "VOICE OUT",
-    badge: "Voice Reply",
-    target: "Engaged",
-    identity: "Recognized",
-    mode: "Speech Output",
+    orbit: "音声案内",
+    badge: "音声出力",
+    target: "応対中",
+    identity: "認識済み",
+    mode: "音声出力",
     user: "……",
     ai: "案内を開始します。",
-    dialogue: "Speaking",
+    dialogue: "発話中",
   },
   farewell: {
-    pill: "BYE",
+    pill: "終了",
     title: "見送りモード",
     subtitle: "会話を終えて待機に戻ります。",
-    orbit: "SESSION END",
-    badge: "Leaving",
-    target: "Exit Detected",
-    identity: "Recognized",
-    mode: "Farewell",
+    orbit: "終了処理",
+    badge: "離脱検知",
+    target: "退出を検知",
+    identity: "認識済み",
+    mode: "見送り",
     user: "ありがとうございました。",
     ai: "ありがとうございました。お気をつけて。",
-    dialogue: "Farewell",
+    dialogue: "見送り",
   },
 };
 
@@ -177,11 +213,13 @@ const runtime = {
   latestFaceCount: 0,
   latestIntervalMs: 800,
   latestTrackEvents: [],
+  latestTargetCenterX: 0.5,
+  latestTargetCenterY: 0.42,
   latestUserText: "……",
   latestAiText: "受付の準備ができています。",
   currentAiBubbleText: "",
-  currentIdentity: "Unknown",
-  currentMode: "Standby",
+  currentIdentity: "未認識",
+  currentMode: "待機中",
   currentTarget: "未検知",
   bootBlocked: false,
   blinkTimerId: null,
@@ -194,10 +232,26 @@ const runtime = {
   expectedChunkId: 1,
   nextStartTime: 0,
   currentSourceNode: null,
+  lastFeedObjectUrl: null,
   jitterPrimed: false,
   pendingGreeting: false,
+  pendingGreetingSinceMs: 0,
   unknownFaceFrames: 0,
+  faceResultSent: false,
+  wsRttMs: null,
+  lastFrameRttMs: null,
+  audioCaptureAnnounced: false,
 };
+
+function updateEyeGaze(centerX = 0.5, centerY = 0.42) {
+  if (!assistantFace) return;
+  const normalizedX = Math.max(0, Math.min(1, Number.isFinite(centerX) ? centerX : 0.5));
+  const normalizedY = Math.max(0, Math.min(1, Number.isFinite(centerY) ? centerY : 0.42));
+  const offsetX = (normalizedX - 0.5) * 22;
+  const offsetY = (normalizedY - 0.42) * 12;
+  assistantFace.style.setProperty("--eye-offset-x", `${offsetX.toFixed(1)}px`);
+  assistantFace.style.setProperty("--eye-offset-y", `${offsetY.toFixed(1)}px`);
+}
 
 function showDialogueNote(message) {
   if (!dialogueNote) return;
@@ -226,10 +280,14 @@ function handleTrackEvents(trackEvents) {
     if (item.event_type === "approached") {
       sendRecognitionEvent("approach", item.person_id || null);
       runtime.pendingGreeting = true;
+      runtime.pendingGreetingSinceMs = performance.now();
+      runtime.faceResultSent = false;
       runtime.unknownFaceFrames = 0;
     } else if (item.event_type === "left") {
       sendRecognitionEvent("leave", item.person_id || null);
       runtime.pendingGreeting = false;
+      runtime.pendingGreetingSinceMs = 0;
+      runtime.faceResultSent = false;
       runtime.unknownFaceFrames = 0;
       if (!item.person_id || item.person_id === runtime.recognizedPersonId) {
         runtime.recognizedPersonId = null;
@@ -239,11 +297,14 @@ function handleTrackEvents(trackEvents) {
 }
 
 function updateGreetingDecision(primaryPersonId, faceCount, matchCount) {
-  if (!runtime.pendingGreeting) return;
+  if (runtime.faceResultSent) return;
+  const pendingMs = runtime.pendingGreetingSinceMs ? performance.now() - runtime.pendingGreetingSinceMs : 0;
   if (primaryPersonId) {
     runtime.recognizedPersonId = primaryPersonId;
     sendRecognitionEvent("recognized_face", primaryPersonId);
     runtime.pendingGreeting = false;
+    runtime.pendingGreetingSinceMs = 0;
+    runtime.faceResultSent = true;
     runtime.unknownFaceFrames = 0;
     return;
   }
@@ -252,8 +313,18 @@ function updateGreetingDecision(primaryPersonId, faceCount, matchCount) {
     if (runtime.unknownFaceFrames >= 3) {
       sendRecognitionEvent("unknown_face", null);
       runtime.pendingGreeting = false;
+      runtime.pendingGreetingSinceMs = 0;
+      runtime.faceResultSent = true;
       runtime.unknownFaceFrames = 0;
     }
+    return;
+  }
+  if (runtime.pendingGreeting && runtime.latestPersonCount > 0 && pendingMs >= 2500) {
+    sendRecognitionEvent("unknown_face", null);
+    runtime.pendingGreeting = false;
+    runtime.pendingGreetingSinceMs = 0;
+    runtime.faceResultSent = true;
+    runtime.unknownFaceFrames = 0;
     return;
   }
   if (faceCount <= 0) {
@@ -264,6 +335,28 @@ function updateGreetingDecision(primaryPersonId, faceCount, matchCount) {
 function updateClock() {
   const now = new Date();
   statusTime.textContent = now.toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit" });
+}
+
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function updateViewportMetrics() {
+  const viewport = window.visualViewport;
+  const viewportWidth = Math.max(320, Math.round(viewport?.width || window.innerWidth || 0));
+  const viewportHeight = Math.max(560, Math.round(viewport?.height || window.innerHeight || 0));
+  const phoneRatio = clamp(viewportWidth / viewportHeight, 0.5, 0.6);
+  const availableWidth = Math.max(300, viewportWidth - 12);
+  const availableHeight = Math.max(520, viewportHeight - 12);
+  const widthByHeight = availableHeight * phoneRatio;
+  const phoneWidth = clamp(Math.min(availableWidth, widthByHeight, 468), 300, 468);
+  const root = document.documentElement;
+  root.style.setProperty("--phone-frame-width", `${phoneWidth.toFixed(1)}px`);
+  root.style.setProperty("--phone-frame-ratio", `${phoneRatio.toFixed(4)}`);
+  root.style.setProperty("--live-stage-pad-top", `max(8px, env(safe-area-inset-top, 0px))`);
+  root.style.setProperty("--live-stage-pad-right", `max(8px, env(safe-area-inset-right, 0px))`);
+  root.style.setProperty("--live-stage-pad-bottom", `max(8px, env(safe-area-inset-bottom, 0px))`);
+  root.style.setProperty("--live-stage-pad-left", `max(8px, env(safe-area-inset-left, 0px))`);
 }
 
 function applyState(state, overrides = {}) {
@@ -300,25 +393,25 @@ function inferVisualState() {
 
 function refreshVisualState() {
   const state = inferVisualState();
-  const identity = runtime.recognizedPersonId || (runtime.latestFaceCount > 0 ? "Guest" : "Unknown");
+  const identity = runtime.recognizedPersonId || (runtime.latestFaceCount > 0 ? "来訪者" : "未認識");
   const target =
     runtime.latestFaceCount > 0
-      ? "Face Locked"
+      ? "顔を検出"
       : runtime.latestPersonCount > 0
-        ? `${runtime.latestPersonCount} Person`
+        ? `${runtime.latestPersonCount}人を検知`
         : "未検知";
   const mode =
     state === "speaking"
-      ? "Speech Output"
+      ? "音声出力"
       : state === "thinking"
-        ? "Response Planning"
+        ? "回答生成"
         : state === "listening"
-          ? "Speech Input"
+          ? "音声入力"
           : state === "recognized"
-            ? "Face Recognition"
+            ? "顔認識"
             : state === "detecting"
-              ? "Person Detection"
-              : "Standby";
+              ? "人物検知"
+              : "待機中";
   const subtitle =
     state === "recognized" && runtime.recognizedPersonId
       ? `${runtime.recognizedPersonId} さんを認識しました。`
@@ -335,7 +428,10 @@ function refreshVisualState() {
     user: runtime.latestUserText,
     ai: aiText,
   });
-  debugPill.textContent = `vision ${runtime.latestPersonCount}/${runtime.latestFaceCount} | ${state} | ${runtime.latestIntervalMs}ms`;
+  const frameRtt = runtime.lastFrameRttMs == null ? "-" : `${Math.round(runtime.lastFrameRttMs)}ms`;
+  const wsRtt = runtime.wsRttMs == null ? "-" : `${Math.round(runtime.wsRttMs)}ms`;
+  debugPill.textContent = `人物 ${runtime.latestPersonCount} / 顔 ${runtime.latestFaceCount} | ${dialogueStage.textContent} | 映像 ${frameRtt} | 音声 ${wsRtt}`;
+  updateEyeGaze(runtime.latestTargetCenterX, runtime.latestTargetCenterY);
 }
 
 function scheduleNextFrame(delayMs) {
@@ -443,8 +539,12 @@ async function connectVoiceSocket() {
   socket.binaryType = "arraybuffer";
 
   socket.onopen = () => {
-    netPill.textContent = "Online";
+    netPill.textContent = "接続中";
     runtime.ws = socket;
+    socket.send(JSON.stringify({
+      type: "diag_ping",
+      client_sent_ms: Date.now(),
+    }));
   };
 
   socket.onmessage = async (event) => {
@@ -460,7 +560,12 @@ async function connectVoiceSocket() {
     }
 
     const data = JSON.parse(event.data);
-    if (data.status === "system_info") {
+    if (data.status === "diag_pong") {
+      if (typeof data.client_sent_ms === "number") {
+      runtime.wsRttMs = Date.now() - data.client_sent_ms;
+        refreshVisualState();
+      }
+    } else if (data.status === "system_info") {
       runtime.latestAiText = data.message;
       runtime.currentAiBubbleText = "";
       if (data.message.includes("接近")) {
@@ -517,11 +622,13 @@ async function connectVoiceSocket() {
 
   socket.onclose = () => {
     runtime.ws = null;
-    netPill.textContent = "Reconnect";
+    netPill.textContent = "再接続";
+    showDialogueNote("音声接続が切れました。");
   };
 
   socket.onerror = () => {
-    netPill.textContent = "Error";
+    netPill.textContent = "通信エラー";
+    showDialogueNote("音声接続エラー");
   };
 
   return new Promise((resolve, reject) => {
@@ -544,6 +651,13 @@ async function initMedia() {
   runtime.processor = runtime.audioContext.createScriptProcessor(512, 1, 1);
   runtime.processor.onaudioprocess = (event) => {
     if (!runtime.ws || runtime.ws.readyState !== WebSocket.OPEN) return;
+    if (!runtime.audioCaptureAnnounced) {
+      runtime.audioCaptureAnnounced = true;
+      runtime.ws.send(JSON.stringify({
+        type: "client_audio_capture_started",
+        client_sent_ms: Date.now(),
+      }));
+    }
     runtime.ws.send(event.inputBuffer.getChannelData(0).buffer);
   };
   runtime.sourceInput.connect(runtime.processor);
@@ -557,6 +671,7 @@ async function captureAndSendFrame() {
   if (!runtime.stream || runtime.busyFrame || !cameraVideo.videoWidth) return;
   runtime.busyFrame = true;
   try {
+    const frameRequestStart = performance.now();
     const width = 720;
     const scale = width / cameraVideo.videoWidth;
     const height = Math.max(1, Math.round(cameraVideo.videoHeight * scale));
@@ -572,26 +687,39 @@ async function captureAndSendFrame() {
       throw new Error(await response.text());
     }
     const imageBlob = await response.blob();
-    feedImage.src = URL.createObjectURL(imageBlob);
+    const nextFeedObjectUrl = URL.createObjectURL(imageBlob);
+    feedImage.src = nextFeedObjectUrl;
+    if (runtime.lastFeedObjectUrl) {
+      URL.revokeObjectURL(runtime.lastFeedObjectUrl);
+    }
+    runtime.lastFeedObjectUrl = nextFeedObjectUrl;
     runtime.frameCount += 1;
     const matchCount = Number(response.headers.get("x-match-count") || "0");
     runtime.latestPersonCount = Number(response.headers.get("x-person-count") || "0");
     runtime.latestFaceCount = Number(response.headers.get("x-face-count") || "0");
-    const primaryPersonId = response.headers.get("x-primary-person-id") || "";
+    runtime.latestTargetCenterX = Number(response.headers.get("x-primary-person-cx") || "0.5");
+    runtime.latestTargetCenterY = Number(response.headers.get("x-primary-person-cy") || "0.42");
+    const primaryPersonIdRaw = response.headers.get("x-primary-person-id") || "";
+    const primaryPersonId = primaryPersonIdRaw ? decodeURIComponent(primaryPersonIdRaw) : "";
     runtime.recognizedPersonId = primaryPersonId || runtime.recognizedPersonId;
     runtime.latestTrackEvents = JSON.parse(response.headers.get("x-track-events") || "[]");
     handleTrackEvents(runtime.latestTrackEvents);
     updateGreetingDecision(primaryPersonId, runtime.latestFaceCount, matchCount);
+    runtime.lastFrameRttMs = performance.now() - frameRequestStart;
     runtime.latestIntervalMs = computeNextInterval(runtime.latestPersonCount, runtime.latestFaceCount);
-    runtime.currentIdentity = runtime.recognizedPersonId || (runtime.latestFaceCount > 0 ? "Guest" : "Unknown");
+    runtime.currentIdentity = runtime.recognizedPersonId || (runtime.latestFaceCount > 0 ? "来訪者" : "未認識");
     runtime.currentTarget =
       runtime.latestFaceCount > 0
-        ? "Face Locked"
+        ? "顔を検出"
         : runtime.latestPersonCount > 0
-          ? `${runtime.latestPersonCount} Person`
+          ? `${runtime.latestPersonCount}人を検知`
           : "未検知";
     if (!runtime.latestPersonCount && !runtime.latestFaceCount && !runtime.speaking && !runtime.thinking && !runtime.listening) {
       runtime.recognizedPersonId = null;
+      runtime.pendingGreeting = false;
+      runtime.pendingGreetingSinceMs = 0;
+      runtime.faceResultSent = false;
+      runtime.unknownFaceFrames = 0;
     }
     refreshVisualState();
     scheduleNextFrame(runtime.latestIntervalMs);
@@ -612,6 +740,10 @@ function stopRuntime() {
     for (const track of runtime.stream.getTracks()) track.stop();
   }
   if (runtime.ws) runtime.ws.close();
+  if (runtime.lastFeedObjectUrl) {
+    URL.revokeObjectURL(runtime.lastFeedObjectUrl);
+    runtime.lastFeedObjectUrl = null;
+  }
 }
 
 function queueBlink(delay) {
@@ -625,6 +757,12 @@ function queueBlink(delay) {
 
 async function startApp() {
   if (runtime.started) return;
+  if (CONFIG_ERROR) {
+    bootCopy.textContent = "接続先設定が不正です。";
+    bootNote.textContent = CONFIG_ERROR;
+    bootStartButton.disabled = false;
+    return;
+  }
   if (runtime.ws && runtime.ws.readyState === WebSocket.OPEN) {
     runtime.ws.close();
     runtime.ws = null;
@@ -657,11 +795,23 @@ async function startApp() {
 
 setInterval(updateClock, 10000);
 updateClock();
+updateViewportMetrics();
 applyState("idle");
+updateEyeGaze(0.5, 0.42);
 refreshVisualState();
 bootStartButton.addEventListener("click", startApp);
 window.addEventListener("beforeunload", stopRuntime);
+window.addEventListener("resize", updateViewportMetrics);
+window.visualViewport?.addEventListener("resize", updateViewportMetrics);
+window.visualViewport?.addEventListener("scroll", updateViewportMetrics);
 window.addEventListener("load", () => {
+  updateViewportMetrics();
+  if (CONFIG_ERROR) {
+    bootCopy.textContent = "接続先設定を確認してください。";
+    bootNote.textContent = `${CONFIG_ERROR} | vision=${String(RECEPTION_CONFIG.visionHttpBase || "")} | voice=${String(RECEPTION_CONFIG.voiceWsUrl || "")}`;
+    bootStartButton.disabled = false;
+    return;
+  }
   bootCopy.textContent = "開始ボタンを押してカメラとマイクを有効化してください。";
   bootNote.textContent = "音声再生を確実に有効化するため、最初の起動は手動で行います。";
   bootStartButton.disabled = false;

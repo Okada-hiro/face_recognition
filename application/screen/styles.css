@@ -9,6 +9,12 @@
   --danger: #ff7a7a;
   --warm: #ffcb77;
   --phone-shadow: 0 30px 90px rgba(0, 0, 0, 0.45);
+  --phone-frame-width: min(452px, 96vw);
+  --phone-frame-ratio: 0.5495;
+  --live-stage-pad-top: max(8px, env(safe-area-inset-top, 0px));
+  --live-stage-pad-right: max(8px, env(safe-area-inset-right, 0px));
+  --live-stage-pad-bottom: max(8px, env(safe-area-inset-bottom, 0px));
+  --live-stage-pad-left: max(8px, env(safe-area-inset-left, 0px));
 }
 
 * {
@@ -47,7 +53,11 @@ body.app-live {
   min-height: 100vh;
   display: grid;
   place-items: center;
-  padding: 18px;
+  padding:
+    var(--live-stage-pad-top)
+    var(--live-stage-pad-right)
+    var(--live-stage-pad-bottom)
+    var(--live-stage-pad-left);
 }
 
 .director-panel {
@@ -132,10 +142,10 @@ body.app-live {
 }
 
 .phone-frame {
-  width: min(420px, 92vw);
-  aspect-ratio: 9 / 19.5;
-  padding: 14px;
-  border-radius: 48px;
+  width: var(--phone-frame-width);
+  aspect-ratio: var(--phone-frame-ratio);
+  padding: 12px;
+  border-radius: 42px;
   background:
     linear-gradient(145deg, #111827, #05070d),
     linear-gradient(180deg, rgba(255,255,255,0.12), transparent);
@@ -161,8 +171,8 @@ body.app-live {
   overflow: hidden;
   width: 100%;
   height: 100%;
-  border-radius: 36px;
-  padding: 18px 18px 22px;
+  border-radius: 32px;
+  padding: 18px 18px 20px;
   background:
     radial-gradient(circle at 50% 8%, rgba(115, 240, 197, 0.18), transparent 26%),
     radial-gradient(circle at 80% 0%, rgba(73, 122, 255, 0.24), transparent 26%),
@@ -208,7 +218,7 @@ body.app-live {
 
 .state-pill {
   border-radius: 999px;
-  padding: 10px 12px;
+  padding: 9px 12px;
   background: rgba(255, 255, 255, 0.06);
   border: 1px solid rgba(255, 255, 255, 0.12);
   color: var(--accent);
@@ -221,8 +231,8 @@ body.app-live {
   position: relative;
   display: grid;
   place-items: center;
-  min-height: 290px;
-  margin: 8px 0 10px;
+  min-height: 258px;
+  margin: 6px 0 10px;
 }
 
 .halo,
@@ -426,11 +436,13 @@ body.app-live {
 
 .feed-image {
   z-index: 0;
-  opacity: 0.96;
+  opacity: 0;
+  pointer-events: none;
 }
 
 .camera-video {
-  opacity: 0;
+  z-index: 0;
+  opacity: 1;
   pointer-events: none;
 }
 
@@ -732,6 +744,8 @@ body.app-live {
 }
 
 .phone-screen.demo-eyes .assistant-face {
+  --eye-offset-x: 0px;
+  --eye-offset-y: 0px;
   width: 280px;
   height: 180px;
   border-radius: 0;
@@ -772,6 +786,8 @@ body.app-live {
     radial-gradient(circle at 38% 26%, rgba(255,255,255,0.12), transparent 20%),
     #050505;
   box-shadow: none;
+  transform: translate(var(--eye-offset-x), var(--eye-offset-y));
+  transition: transform 140ms ease-out;
 }
 
 .phone-screen.demo-eyes .eye-shine {
@@ -782,6 +798,8 @@ body.app-live {
   height: 48px;
   border-radius: 50%;
   background: rgba(255, 255, 255, 0.96);
+  transform: translate(calc(var(--eye-offset-x) * 0.45), calc(var(--eye-offset-y) * 0.45));
+  transition: transform 140ms ease-out;
 }
 
 .phone-screen.demo-eyes .assistant-face.is-blinking .eye {
@@ -797,19 +815,6 @@ body.app-live {
 .phone-screen.demo-eyes[data-state="listening"] .eye {
   top: 16px;
 }
-
-.phone-screen.demo-eyes[data-state="detecting"] .eye-core {
-  animation: detectCore 1.7s ease-in-out infinite;
-}
-
-.phone-screen.demo-eyes[data-state="listening"] .eye-core {
-  animation: listeningLook 2.6s ease-in-out infinite;
-}
-
-.phone-screen.demo-eyes[data-state="thinking"] .eye-core {
-  animation: lookAround 2s ease-in-out infinite;
-}
-
 
 .director-panel.is-hidden {
   opacity: 0;
@@ -970,5 +975,70 @@ body.app-live {
     grid-template-columns: 1fr;
     gap: 20px;
     padding: 24px 16px 40px;
+  }
+}
+
+@media (max-width: 640px) {
+  .live-stage {
+    padding:
+      var(--live-stage-pad-top)
+      var(--live-stage-pad-right)
+      var(--live-stage-pad-bottom)
+      var(--live-stage-pad-left);
+  }
+
+  .phone-frame {
+    border-radius: 34px;
+    padding: 10px;
+  }
+
+  .phone-frame::before {
+    top: 14px;
+    height: 24px;
+  }
+
+  .phone-screen {
+    border-radius: 28px;
+    padding: 16px 15px 18px;
+  }
+
+  .hero h2 {
+    font-size: 1.48rem;
+  }
+
+  .hero p:last-child {
+    font-size: 0.88rem;
+  }
+
+  .avatar-zone {
+    min-height: 220px;
+  }
+
+  .phone-screen.demo-eyes .assistant-face {
+    width: 236px;
+    height: 152px;
+  }
+
+  .phone-screen.demo-eyes .eye {
+    width: 95px;
+    height: 124px;
+  }
+
+  .phone-screen.demo-eyes .eye-core {
+    left: 22px;
+    top: 16px;
+    width: 62px;
+    height: 90px;
+  }
+
+  .phone-screen.demo-eyes .eye-shine {
+    left: 16px;
+    top: 18px;
+    width: 28px;
+    height: 42px;
+  }
+
+  .feed-body {
+    grid-template-columns: 1fr;
   }
 }

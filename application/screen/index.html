@@ -3,15 +3,15 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Reception Screen</title>
+  <title>受付画面デモ</title>
   <link rel="stylesheet" href="./styles.css">
 </head>
 <body>
   <main class="stage">
     <section class="director-panel">
       <div class="panel-card">
-        <p class="eyebrow">Screen Control</p>
-        <h1>Reception Phone UI</h1>
+        <p class="eyebrow">画面コントロール</p>
+        <h1>受付スマホUI</h1>
         <p class="panel-copy">
           動画撮影用のスマホ画面です。検知、認識、傾聴、会話の各状態を即座に切り替えられます。
         </p>
@@ -37,7 +37,7 @@
         <div class="phone-screen demo-eyes" data-state="idle">
           <div class="status-bar">
             <span>9:41</span>
-            <span>Reception AI</span>
+            <span>受付AI</span>
             <span>5G 92%</span>
           </div>
 
@@ -47,11 +47,11 @@
 
           <header class="hero">
             <div class="hero-copy">
-              <p class="eyebrow">Smart Reception</p>
+              <p class="eyebrow">スマート受付</p>
               <h2 id="hero-title">待機中</h2>
               <p id="hero-subtitle">人が近づくと検知を開始します。</p>
             </div>
-            <div class="state-pill" id="state-pill">IDLE</div>
+            <div class="state-pill" id="state-pill">待機</div>
           </header>
 
           <section class="avatar-zone">
@@ -69,13 +69,13 @@
               </div>
             </div>
 
-            <div class="orbit-text" id="orbit-text">STANDBY</div>
+            <div class="orbit-text" id="orbit-text">待機中</div>
           </section>
 
           <section class="feed-card">
             <div class="feed-head">
-              <span class="feed-title">Recognition Feed</span>
-              <span class="feed-badge" id="feed-badge">No Target</span>
+              <span class="feed-title">カメラ映像</span>
+              <span class="feed-badge" id="feed-badge">対象なし</span>
             </div>
             <div class="feed-body">
               <div class="feed-camera">
@@ -84,20 +84,20 @@
                 <div class="corner bl"></div>
                 <div class="corner br"></div>
                 <div class="target-box" id="target-box"></div>
-                <div class="target-label" id="target-label">searching...</div>
+                <div class="target-label" id="target-label">探索中…</div>
               </div>
               <div class="feed-meta">
                 <div class="meta-row">
-                  <span class="meta-key">Target</span>
+                  <span class="meta-key">対象</span>
                   <span class="meta-value" id="meta-target">未検知</span>
                 </div>
                 <div class="meta-row">
-                  <span class="meta-key">Identity</span>
-                  <span class="meta-value" id="meta-identity">Unknown</span>
+                  <span class="meta-key">認識</span>
+                  <span class="meta-value" id="meta-identity">未認識</span>
                 </div>
                 <div class="meta-row">
-                  <span class="meta-key">Mode</span>
-                  <span class="meta-value" id="meta-mode">Standby</span>
+                  <span class="meta-key">状態</span>
+                  <span class="meta-value" id="meta-mode">待機中</span>
                 </div>
               </div>
             </div>
@@ -105,10 +105,10 @@
 
           <section class="dialogue-card">
             <div class="dialogue-head">
-              <span>Live Dialogue</span>
-              <span id="dialogue-stage">Waiting</span>
+              <span>会話ログ</span>
+              <span id="dialogue-stage">待機中</span>
             </div>
-            <div class="bubble bubble-user" id="bubble-user">......</div>
+            <div class="bubble bubble-user" id="bubble-user">……</div>
             <div class="bubble bubble-ai" id="bubble-ai">受付の準備ができています。</div>
           </section>
         </div>

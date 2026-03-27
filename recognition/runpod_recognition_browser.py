@@ -69,7 +69,7 @@ app.add_middleware(
     allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["x-frame-index", "x-track-events", "x-person-count", "x-face-count", "x-primary-person-id"],
+    expose_headers=["x-frame-index", "x-track-events", "x-person-count", "x-face-count", "x-match-count", "x-primary-person-id", "x-primary-person-cx", "x-primary-person-cy"],
 )
 _live_monitor_lock = threading.Lock()
 _live_monitor: ReceptionMonitor | None = None
@@ -785,6 +785,31 @@ def _select_primary_person_id(event) -> str:
     return ""
 
 
+def _select_primary_person(event):
+    match_track_ids = {match.source_track_id for match in event.matches if match.source_track_id is not None}
+    for person in event.persons:
+        if person.track_id in match_track_ids:
+            return person
+    approaching_people = [person for person in event.persons if getattr(person, "approaching", False)]
+    if approaching_people:
+        return max(approaching_people, key=lambda person: person.bbox.area)
+    if event.persons:
+        return max(event.persons, key=lambda person: person.bbox.area)
+    return None
+
+
+def _select_primary_person_center(event, frame_width: int, frame_height: int) -> tuple[float, float]:
+    person = _select_primary_person(event)
+    if person is None:
+        return 0.5, 0.42
+    bbox = person.bbox
+    center_x = (bbox.x1 + bbox.x2) / 2.0
+    center_y = (bbox.y1 + bbox.y2) / 2.0
+    safe_width = max(1, frame_width)
+    safe_height = max(1, frame_height)
+    return center_x / safe_width, center_y / safe_height
+
+
 @app.get("/health")
 async def health() -> dict[str, object]:
     return {"ok": True, "root": str(ROOT_DIR), "port": PORT}
@@ -872,6 +897,24 @@ async def live_frame(frame: UploadFile = File(...), save_snapshot: str = Form(de
         if save_snapshot.lower() == "true":
             monitor.storage.save_snapshot(frame_index, annotated)
 
+    if event.persons or event.faces or event.matches or event.track_events:
+        logger.info(
+            "[LIVE_FRAME] frame=%d persons=%d faces=%d matches=%d track_events=%s primary_person_id=%s",
+            frame_index,
+            len(event.persons),
+            len(event.faces),
+            len(event.matches),
+            [
+                {
+                    "track_id": item.track_id,
+                    "event_type": item.event_type,
+                    "person_id": item.person_id,
+                }
+                for item in event.track_events
+            ],
+            _select_primary_person_id(event),
+        )
+
     if event.track_events:
         await asyncio.to_thread(_notify_voice_talk, event.track_events)
 
@@ -879,18 +922,22 @@ async def live_frame(frame: UploadFile = File(...), save_snapshot: str = Form(de
     if not ok:
         raise HTTPException(status_code=500, detail="Failed to encode annotated frame.")
 
+    primary_center_x, primary_center_y = _select_primary_person_center(event, image.shape[1], image.shape[0])
+
     headers = {
         "x-frame-index": str(frame_index),
         "x-match-count": str(len(event.matches)),
         "x-face-count": str(len(event.faces)),
         "x-person-count": str(len(event.persons)),
-        "x-primary-person-id": _select_primary_person_id(event),
+        "x-primary-person-id": quote(_select_primary_person_id(event), safe=""),
+        "x-primary-person-cx": f"{primary_center_x:.4f}",
+        "x-primary-person-cy": f"{primary_center_y:.4f}",
         "x-track-events": json.dumps(
             [
                 {"track_id": item.track_id, "event_type": item.event_type, "person_id": item.person_id}
                 for item in event.track_events
             ],
-            ensure_ascii=False,
+            ensure_ascii=True,
         ),
     }
     return Response(content=encoded.tobytes(), media_type="image/jpeg", headers=headers)

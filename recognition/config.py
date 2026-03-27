@@ -22,6 +22,7 @@ class AppConfig:
     face_confidence: float = 0.55
     face_match_threshold: float = 0.35
     approach_area_ratio: float = 1.08
+    approach_presence_area_ratio: float = 0.035
     approach_min_frames: int = 2
     track_max_missing_frames: int = 6
     save_snapshots: bool = True

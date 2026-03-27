@@ -24,6 +24,7 @@ class ReceptionMonitor:
         self.storage = EventStorage(config)
         self.tracker = PersonTracker(
             config.approach_area_ratio,
+            config.approach_presence_area_ratio,
             config.approach_min_frames,
             config.track_max_missing_frames,
         )
@@ -37,7 +38,8 @@ class ReceptionMonitor:
 
     def process_frame(self, frame: np.ndarray, frame_index: int) -> tuple[np.ndarray, EventRecord]:
         person_candidates = self.person_detector.detect(frame)
-        persons, track_events = self.tracker.update(person_candidates)
+        frame_area = int(frame.shape[0] * frame.shape[1]) if frame is not None else 0
+        persons, track_events = self.tracker.update(person_candidates, frame_area=frame_area)
         face_items = self._attach_faces_to_persons(frame, persons)
         faces = [face for face, _embedding in face_items]
         matches: list[FaceMatch] = []

@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>Reception App</title>
+  <title>受付アプリ</title>
   <link rel="stylesheet" href="/app-assets/styles.css">
 </head>
 <body class="app-live">
@@ -13,8 +13,8 @@
         <div class="phone-screen demo-eyes" data-state="idle">
           <div class="status-bar">
             <span id="status-time">9:41</span>
-            <span>Reception AI</span>
-            <span id="net-pill">Secure</span>
+            <span>受付AI</span>
+            <span id="net-pill">接続待ち</span>
           </div>
 
           <div class="ambient ambient-left"></div>
@@ -23,11 +23,11 @@
 
           <header class="hero">
             <div class="hero-copy">
-              <p class="eyebrow">Smart Reception</p>
+              <p class="eyebrow">スマート受付</p>
               <h2 id="hero-title">待機中</h2>
               <p id="hero-subtitle">カメラとマイクの準備をしています。</p>
             </div>
-            <div class="state-pill" id="state-pill">BOOT</div>
+            <div class="state-pill" id="state-pill">起動中</div>
           </header>
 
           <section class="avatar-zone">
@@ -46,13 +46,13 @@
               </div>
             </div>
 
-            <div class="orbit-text" id="orbit-text">BOOTING</div>
+            <div class="orbit-text" id="orbit-text">起動中</div>
           </section>
 
           <section class="feed-card">
             <div class="feed-head">
-              <span class="feed-title">Recognition Feed</span>
-              <span class="feed-badge" id="feed-badge">Connecting</span>
+              <span class="feed-title">カメラ映像</span>
+              <span class="feed-badge" id="feed-badge">接続中</span>
             </div>
             <div class="feed-body">
               <div class="feed-camera">
@@ -63,20 +63,20 @@
                 <div class="corner bl"></div>
                 <div class="corner br"></div>
                 <div class="target-box" id="target-box"></div>
-                <div class="target-label" id="target-label">booting...</div>
+                <div class="target-label" id="target-label">起動中…</div>
               </div>
               <div class="feed-meta">
                 <div class="meta-row">
-                  <span class="meta-key">Target</span>
+                  <span class="meta-key">対象</span>
                   <span class="meta-value" id="meta-target">未検知</span>
                 </div>
                 <div class="meta-row">
-                  <span class="meta-key">Identity</span>
-                  <span class="meta-value" id="meta-identity">Unknown</span>
+                  <span class="meta-key">認識</span>
+                  <span class="meta-value" id="meta-identity">未認識</span>
                 </div>
                 <div class="meta-row">
-                  <span class="meta-key">Mode</span>
-                  <span class="meta-value" id="meta-mode">Standby</span>
+                  <span class="meta-key">状態</span>
+                  <span class="meta-value" id="meta-mode">待機中</span>
                 </div>
               </div>
             </div>
@@ -84,8 +84,8 @@
 
           <section class="dialogue-card">
             <div class="dialogue-head">
-              <span>Live Dialogue</span>
-              <span id="dialogue-stage">Booting</span>
+              <span>会話ログ</span>
+              <span id="dialogue-stage">起動中</span>
             </div>
             <div class="bubble bubble-user" id="bubble-user">……</div>
             <div class="bubble bubble-ai" id="bubble-ai">受付アプリを起動しています。</div>
@@ -94,7 +94,7 @@
 
           <div class="app-boot" id="app-boot">
             <div class="app-boot-card">
-              <p class="eyebrow">Reception App</p>
+              <p class="eyebrow">受付アプリ</p>
               <h1>受付を開始</h1>
               <p id="boot-copy">この端末のカメラとマイクを使って受付を開始します。</p>
               <button class="live-primary-button" id="boot-start">受付を開始する</button>
@@ -102,7 +102,7 @@
             </div>
           </div>
 
-          <div class="live-debug-pill" id="live-debug-pill">connecting...</div>
+          <div class="live-debug-pill" id="live-debug-pill">接続中…</div>
           <canvas id="capture-canvas" class="capture-canvas" aria-hidden="true"></canvas>
         </div>
       </div>

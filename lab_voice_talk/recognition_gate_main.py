@@ -35,6 +35,7 @@ WS_CLIENTS_LOCK = asyncio.Lock()
 GREETING_PCM_CACHE: dict[str, bytes] = {}
 ENABLE_BARGE_IN = os.getenv("RECOGNITION_ENABLE_BARGE_IN", "1") == "1"
 GREETING_TTS_WORKER_ID = int(os.getenv("RECOGNITION_GREETING_TTS_WORKER_ID", "0"))
+SESSION_RESET_EPOCH = 0
 DEFAULT_KNOWN_GREETING_TEMPLATE = (
     "おはようございます、{person_id}さん。"
     if getattr(base, "IS_SAMPLE_MODE", False)
@@ -66,6 +67,34 @@ def _create_voice_session_state():
     if hasattr(base, "create_session_state"):
         return base.create_session_state()
     return []
+
+
+def _reset_speaker_guard_state() -> int:
+    speaker_guard = getattr(base, "speaker_guard", None)
+    if speaker_guard is None:
+        return 0
+    known_speakers = getattr(speaker_guard, "known_speakers", None)
+    if isinstance(known_speakers, list):
+        cleared = len(known_speakers)
+        known_speakers.clear()
+        return cleared
+    return 0
+
+
+async def _reset_conversation_context(reason: str, person_id: str | None) -> None:
+    global SESSION_RESET_EPOCH
+    cleared_speakers = _reset_speaker_guard_state()
+    _set_next_audio_is_registration(False)
+    async with STATE_LOCK:
+        SESSION_RESET_EPOCH += 1
+        reset_epoch = SESSION_RESET_EPOCH
+    base.logger.info(
+        "[SESSION_RESET] reason=%s person_id=%s cleared_speakers=%d epoch=%d",
+        reason,
+        person_id,
+        cleared_speakers,
+        reset_epoch,
+    )
 
 
 def _get_tts_model_count() -> int:
@@ -202,6 +231,7 @@ async def _broadcast_greeting(person_id: str | None, known_face: bool) -> None:
 
 
 async def _handle_approach(person_id: str | None) -> dict[str, object]:
+    await _reset_conversation_context("approach", person_id)
     async with STATE_LOCK:
         STATE.active = True
         STATE.person_id = None
@@ -222,13 +252,20 @@ async def _handle_approach(person_id: str | None) -> dict[str, object]:
 
 async def _handle_face_recognition(person_id: str | None, known_face: bool) -> dict[str, object]:
     async with STATE_LOCK:
+        bootstrapped = False
         if not STATE.active:
-            return {"ok": False, "active": False, "person_id": None, "reason": "inactive"}
+            STATE.active = True
+            STATE.person_id = None
+            STATE.greeted = False
+            STATE.recognition_pending = True
+            bootstrapped = True
         if STATE.greeted:
             return {"ok": True, "active": True, "person_id": STATE.person_id, "already_greeted": True}
         STATE.person_id = person_id if known_face else None
         STATE.greeted = True
         STATE.recognition_pending = False
+    if bootstrapped:
+        base.logger.info("[FACE_RESULT] bootstrapped_without_approach known_face=%s person_id=%s", known_face, person_id)
     await _broadcast_json(
         {
             "status": "system_info",
@@ -245,6 +282,7 @@ async def _handle_face_recognition(person_id: str | None, known_face: bool) -> d
 
 
 async def _handle_leave(person_id: str | None) -> dict[str, object]:
+    await _reset_conversation_context("leave", person_id)
     async with STATE_LOCK:
         STATE.active = False
         STATE.person_id = person_id
@@ -267,7 +305,23 @@ async def _handle_control_message(websocket: WebSocket, raw_text: str) -> None:
         base.logger.warning("[WS_CONTROL] invalid_json text=%r", raw_text[:200])
         return
 
-    if payload.get("type") != "recognition_event":
+    payload_type = payload.get("type")
+    if payload_type == "diag_ping":
+        await websocket.send_json(
+            {
+                "status": "diag_pong",
+                "client_sent_ms": payload.get("client_sent_ms"),
+                "server_recv_ms": int(time.time() * 1000),
+            }
+        )
+        base.logger.info("[WS_DIAG] ping client=%s client_sent_ms=%s", websocket.client, payload.get("client_sent_ms"))
+        return
+
+    if payload_type == "client_audio_capture_started":
+        base.logger.info("[WS_AUDIO] capture_started client=%s client_sent_ms=%s", websocket.client, payload.get("client_sent_ms"))
+        return
+
+    if payload_type != "recognition_event":
         base.logger.info("[WS_CONTROL] ignored payload=%s", payload)
         return
 
@@ -357,11 +411,15 @@ async def websocket_endpoint(websocket: WebSocket):
     audio_buffer = []
     is_speaking = False
     interruption_triggered = False
+    binary_chunk_count = 0
+    first_binary_logged = False
+    connect_started = time.perf_counter()
 
     window_size_samples = 512
     sample_rate = 16000
     check_speaker_samples = 30000
     session_state = _create_voice_session_state()
+    session_reset_epoch = SESSION_RESET_EPOCH
 
     try:
         await websocket.send_json({"status": "system_info", "message": "認識システムからの接近待ちです。"})
@@ -372,10 +430,31 @@ async def websocket_endpoint(websocket: WebSocket):
             data_text = message.get("text")
             if data_text is not None:
                 await _handle_control_message(websocket, data_text)
+                if session_reset_epoch != SESSION_RESET_EPOCH:
+                    session_state = _create_voice_session_state()
+                    session_reset_epoch = SESSION_RESET_EPOCH
                 continue
             data_bytes = message.get("bytes")
             if data_bytes is None:
                 continue
+            if session_reset_epoch != SESSION_RESET_EPOCH:
+                session_state = _create_voice_session_state()
+                session_reset_epoch = SESSION_RESET_EPOCH
+            binary_chunk_count += 1
+            if not first_binary_logged:
+                first_binary_logged = True
+                base.logger.info(
+                    "[WS_AUDIO] first_chunk client=%s after_connect_ms=%.1f bytes=%d",
+                    websocket.client,
+                    (time.perf_counter() - connect_started) * 1000.0,
+                    len(data_bytes),
+                )
+            elif binary_chunk_count % 32 == 0:
+                base.logger.info(
+                    "[WS_AUDIO] chunk_count=%d client=%s",
+                    binary_chunk_count,
+                    websocket.client,
+                )
             async with STATE_LOCK:
                 current_active = STATE.active
             if not current_active:

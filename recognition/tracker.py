@@ -35,15 +35,17 @@ class TrackState:
 @dataclass(slots=True)
 class PersonTracker:
     approach_area_ratio: float
+    approach_presence_area_ratio: float
     approach_min_frames: int
     max_missing_frames: int
     next_track_id: int = 1
     tracks: dict[int, TrackState] = field(default_factory=dict)
 
-    def update(self, detections: list[tuple[BoundingBox, float]]) -> tuple[list[PersonDetection], list[TrackEvent]]:
+    def update(self, detections: list[tuple[BoundingBox, float]], frame_area: int | None = None) -> tuple[list[PersonDetection], list[TrackEvent]]:
         assigned: set[int] = set()
         results: list[PersonDetection] = []
         events: list[TrackEvent] = []
+        frame_area = max(1, frame_area or 0)
 
         for bbox, confidence in detections:
             track = self._match_existing_track(bbox, assigned)
@@ -64,9 +66,15 @@ class PersonTracker:
                 track.missing_frames = 0
 
             baseline_area = max(1, track.initial_area)
+            current_area = max(1, track.last_area)
+            growth_ratio = current_area / baseline_area
+            presence_ratio = (current_area / frame_area) if frame_area > 0 else 0.0
             approaching = (
                 track.frames_seen >= self.approach_min_frames
-                and (track.last_area / baseline_area) >= self.approach_area_ratio
+                and (
+                    growth_ratio >= self.approach_area_ratio
+                    or presence_ratio >= self.approach_presence_area_ratio
+                )
             )
             if approaching and not track.approach_announced:
                 track.approach_announced = True

@@ -10,6 +10,7 @@ import torch
 import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 VOICE_APP_MODE = os.getenv("RECOGNITION_VOICE_APP_MODE", "prod").strip().lower()
@@ -18,6 +19,16 @@ base = importlib.import_module(BASE_MODULE_NAME)
 
 
 app = FastAPI()
+PROCESSING_DIR = getattr(base, "PROCESSING_DIR", "incoming_audio")
+TTS_DEBUG_WEB_DIR = getattr(base, "TTS_DEBUG_WEB_DIR", os.path.join(PROCESSING_DIR, "tts_debug"))
+TTS_DEBUG_VIEWER_HTML = getattr(
+    base,
+    "TTS_DEBUG_VIEWER_HTML",
+    os.path.join(os.path.dirname(__file__), "tts_debug_browser.html"),
+)
+os.makedirs(PROCESSING_DIR, exist_ok=True)
+os.makedirs(TTS_DEBUG_WEB_DIR, exist_ok=True)
+app.mount("/download", StaticFiles(directory=PROCESSING_DIR), name="download")
 
 
 @dataclass
@@ -48,6 +59,39 @@ UNKNOWN_GREETING_TEXT = os.getenv("RECOGNITION_GREETING_UNKNOWN_TEXT", DEFAULT_U
 
 class ApproachPayload(BaseModel):
     person_id: str | None = None
+
+
+@app.get("/api/tts-debug-files")
+async def api_tts_debug_files():
+    rows = []
+    for name in os.listdir(TTS_DEBUG_WEB_DIR):
+        if not name.lower().endswith(".wav"):
+            continue
+        full = os.path.join(TTS_DEBUG_WEB_DIR, name)
+        if not os.path.isfile(full):
+            continue
+        st = os.stat(full)
+        rows.append(
+            {
+                "name": name,
+                "size_bytes": int(st.st_size),
+                "modified_ts": float(st.st_mtime),
+                "url": f"/download/tts_debug/{name}",
+            }
+        )
+    rows.sort(key=lambda x: x["modified_ts"], reverse=True)
+    return JSONResponse({"files": rows, "dir": TTS_DEBUG_WEB_DIR})
+
+
+@app.get("/tts-debug", response_class=HTMLResponse)
+async def tts_debug_page():
+    if not os.path.exists(TTS_DEBUG_VIEWER_HTML):
+        return HTMLResponse(
+            "<h3>tts_debug_browser.html が見つかりません。</h3>",
+            status_code=500,
+        )
+    with open(TTS_DEBUG_VIEWER_HTML, "r", encoding="utf-8") as f:
+        return HTMLResponse(f.read())
 
 
 def _set_next_audio_is_registration(enabled: bool) -> None:

@@ -246,23 +246,47 @@ const runtime = {
 function updateEyeGaze(centerX = 0.5, centerY = 0.42) {
   if (!assistantFace) return;
   const normalizedX = Math.max(0, Math.min(1, Number.isFinite(centerX) ? centerX : 0.5));
-  const normalizedY = Math.max(0, Math.min(1, Number.isFinite(centerY) ? centerY : 0.42));
-  const offsetX = (normalizedX - 0.5) * 22;
-  const offsetY = (normalizedY - 0.42) * 12;
+  const normalizedY = Math.max(0, Math.min(1, Number.isFinite(centerY) ? centerY : 0.48));
+  const offsetX = (normalizedX - 0.5) * 18;
+  const offsetY = (normalizedY - 0.48) * 10;
   assistantFace.style.setProperty("--eye-offset-x", `${offsetX.toFixed(1)}px`);
   assistantFace.style.setProperty("--eye-offset-y", `${offsetY.toFixed(1)}px`);
 }
 
-function showDialogueNote(message) {
+function showDialogueNote(message, tone = "muted") {
   if (!dialogueNote) return;
   const text = String(message || "").trim();
   if (!text) {
     dialogueNote.hidden = true;
     dialogueNote.textContent = "";
+    dialogueNote.dataset.tone = "muted";
     return;
   }
   dialogueNote.hidden = false;
   dialogueNote.textContent = text;
+  dialogueNote.dataset.tone = tone;
+}
+
+function normalizeDialogueNote(status, data = {}) {
+  const rawMessage = String(data.message || "").trim();
+  if (status === "ignored") {
+    return { text: "音声が短すぎます。もう少し長く話してください。", tone: "warning" };
+  }
+  if (status === "system_alert") {
+    if (data.alert_type === "unregistered" || rawMessage.includes("外部の会話") || rawMessage.includes("未登録")) {
+      return { text: "他の人の声だと認識しました。", tone: "danger" };
+    }
+    if (rawMessage.includes("会話外")) {
+      return { text: "会話に関係ない音声として扱いました。", tone: "warning" };
+    }
+    if (rawMessage) {
+      return { text: rawMessage, tone: "warning" };
+    }
+  }
+  if (status === "error") {
+    return { text: rawMessage || "処理エラーが発生しました。", tone: "danger" };
+  }
+  return { text: rawMessage, tone: "muted" };
 }
 
 function sendRecognitionEvent(eventName, personId = null) {
@@ -609,13 +633,16 @@ async function connectVoiceSocket() {
     } else if (data.status === "ignored") {
       runtime.listening = false;
       runtime.thinking = false;
-      showDialogueNote(data.message || "会話が短すぎます。");
+      const note = normalizeDialogueNote("ignored", data);
+      showDialogueNote(note.text, note.tone);
     } else if (data.status === "system_alert") {
       runtime.listening = false;
       runtime.thinking = false;
-      showDialogueNote(data.message || "");
+      const note = normalizeDialogueNote("system_alert", data);
+      showDialogueNote(note.text, note.tone);
     } else if (data.status === "error") {
-      showDialogueNote(data.message || "処理エラー");
+      const note = normalizeDialogueNote("error", data);
+      showDialogueNote(note.text, note.tone);
     }
     refreshVisualState();
   };
@@ -623,12 +650,12 @@ async function connectVoiceSocket() {
   socket.onclose = () => {
     runtime.ws = null;
     netPill.textContent = "再接続";
-    showDialogueNote("音声接続が切れました。");
+    showDialogueNote("音声接続が切れました。", "warning");
   };
 
   socket.onerror = () => {
     netPill.textContent = "通信エラー";
-    showDialogueNote("音声接続エラー");
+    showDialogueNote("音声接続エラー", "danger");
   };
 
   return new Promise((resolve, reject) => {

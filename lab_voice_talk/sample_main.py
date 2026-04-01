@@ -573,7 +573,11 @@ async def handle_llm_tts(answer_text: str, websocket: WebSocket):
     text_buffer = ""
     sentence_count = 0
     full_answer = ""
-    split_pattern = r'(?<=[。！？\n])'
+    split_mode = os.getenv("PERM_TTS_SPLIT_MODE", "sentence").strip().lower()
+    if split_mode in {"comma", "commas", "punct", "punctuation"}:
+        split_pattern = r'(?<=[、。！？\n])'
+    else:
+        split_pattern = r'(?<=[。！？\n])'
     llm_tts_start = time.perf_counter()
     TTS_WORKER_COUNT = int(os.getenv("PERM_TTS_WORKER_COUNT", "2"))
     TTS_PREFETCH_AHEAD = 1
@@ -646,7 +650,7 @@ async def handle_llm_tts(answer_text: str, websocket: WebSocket):
     )
     logger.info(
         f"[SCRIPT_TTS_FLOW] start answer_text_len={len(answer_text)} "
-        f"split_pattern={split_pattern}"
+        f"split_mode={split_mode} split_pattern={split_pattern}"
     )
 
     iterator = iter([answer_text])

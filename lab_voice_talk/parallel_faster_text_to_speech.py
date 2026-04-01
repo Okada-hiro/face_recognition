@@ -38,10 +38,13 @@ QWEN3_XVECTOR_ONLY = os.getenv("QWEN3_XVECTOR_ONLY", "1") == "1"
 QWEN3_STAGE_TIMING = os.getenv("QWEN3_STAGE_TIMING", "0") == "1"
 QWEN3_DIAG = os.getenv("QWEN3_DIAG", "0") == "1"
 QWEN3_DYNAMIC_MAX_NEW_TOKENS = os.getenv("QWEN3_DYNAMIC_MAX_NEW_TOKENS", "1") == "1"
-QWEN3_MIN_NEW_TOKENS = int(os.getenv("QWEN3_MIN_NEW_TOKENS", "96"))
-QWEN3_MAX_NEW_TOKENS_CAP = int(os.getenv("QWEN3_MAX_NEW_TOKENS_CAP", "320"))
+QWEN3_MIN_NEW_TOKENS = int(os.getenv("QWEN3_MIN_NEW_TOKENS", "160"))
+QWEN3_MAX_NEW_TOKENS_CAP = int(os.getenv("QWEN3_MAX_NEW_TOKENS_CAP", "512"))
 QWEN3_NEW_TOKENS_PER_CHAR = float(os.getenv("QWEN3_NEW_TOKENS_PER_CHAR", "6.0"))
 QWEN3_NEW_TOKENS_BIAS = int(os.getenv("QWEN3_NEW_TOKENS_BIAS", "48"))
+QWEN3_ASCII_NEW_TOKENS_PER_CHAR = float(os.getenv("QWEN3_ASCII_NEW_TOKENS_PER_CHAR", "18.0"))
+QWEN3_SPACE_NEW_TOKENS = float(os.getenv("QWEN3_SPACE_NEW_TOKENS", "10.0"))
+QWEN3_ASCII_PUNCT_NEW_TOKENS = float(os.getenv("QWEN3_ASCII_PUNCT_NEW_TOKENS", "6.0"))
 
 DEFAULT_PARAMS = {
     "instruct": "人間らしく、感情豊かに、自然な息遣いで話してください。文末をはっきりと発音すること！",
@@ -98,8 +101,24 @@ def _resample_if_needed(audio: np.ndarray, src_sr: int, tgt_sr: int) -> np.ndarr
 def _estimate_max_new_tokens(text: str) -> int:
     if not QWEN3_DYNAMIC_MAX_NEW_TOKENS:
         return int(DEFAULT_PARAMS["max_new_tokens"])
-    text_len = max(1, len(text.strip()))
-    est = int(QWEN3_NEW_TOKENS_BIAS + (text_len * QWEN3_NEW_TOKENS_PER_CHAR))
+    stripped = text.strip()
+    if not stripped:
+        return max(QWEN3_MIN_NEW_TOKENS, min(QWEN3_MAX_NEW_TOKENS_CAP, QWEN3_NEW_TOKENS_BIAS))
+
+    ascii_alnum = sum(1 for ch in stripped if ch.isascii() and ch.isalnum())
+    whitespace = sum(1 for ch in stripped if ch.isspace())
+    ascii_punct = sum(1 for ch in stripped if ch.isascii() and not ch.isalnum() and not ch.isspace())
+    other_chars = max(0, len(stripped) - ascii_alnum - whitespace - ascii_punct)
+
+    est = int(
+        QWEN3_NEW_TOKENS_BIAS
+        + (other_chars * QWEN3_NEW_TOKENS_PER_CHAR)
+        + (ascii_alnum * QWEN3_ASCII_NEW_TOKENS_PER_CHAR)
+        + (whitespace * QWEN3_SPACE_NEW_TOKENS)
+        + (ascii_punct * QWEN3_ASCII_PUNCT_NEW_TOKENS)
+    )
+    if ascii_alnum > 0:
+        est += 32
     est = max(QWEN3_MIN_NEW_TOKENS, est)
     est = min(QWEN3_MAX_NEW_TOKENS_CAP, est)
     return est
@@ -203,7 +222,7 @@ def _generate_wav_with_model(tts_model, text_to_speak: str, prompt_text: str = N
     if QWEN3_DIAG:
         print(
             f"[TTS_DIAG] nonstream_decode text_len={len(text_to_speak)} "
-            f"max_new_tokens={max_new_tokens}"
+            f"max_new_tokens={max_new_tokens} text={text_to_speak!r}"
         )
 
     wavs, sr = tts_model.generate_voice_clone(
@@ -351,7 +370,7 @@ def synthesize_speech_to_memory_stream_for_worker(text_to_speak: str, worker_id:
     if QWEN3_DIAG:
         print(
             f"[TTS_DIAG] stream_decode worker={worker_id} text_len={len(text_to_speak)} "
-            f"max_new_tokens={max_new_tokens}"
+            f"max_new_tokens={max_new_tokens} text={text_to_speak!r}"
         )
 
     chunk_size = max(1, int(DEFAULT_STREAM_PARAMS.get("emit_every_frames", 8)))

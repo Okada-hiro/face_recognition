@@ -86,7 +86,7 @@ print("[INFO] Whisper (v3) グローバルロード: FasterWhisperASRモデル '
 GLOBAL_ASR_MODEL_INSTANCE = None
 try:
     # watch_and_transcribe.py の設定に合わせる
-    GLOBAL_ASR_MODEL_INSTANCE = FasterWhisperASR(lan="ja", modelsize="medium" \
+    GLOBAL_ASR_MODEL_INSTANCE = FasterWhisperASR(lan="ja", modelsize="large-v3-turbo" \
     "")
     print("[INFO] Whisper (v3) グローバルロード: モデル（オブジェクト）ロード完了。")
 except Exception as e:

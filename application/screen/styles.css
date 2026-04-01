@@ -458,14 +458,23 @@ body.app-live .phone-screen {
   color: var(--accent);
 }
 
+.feed-copy {
+  margin: 0 0 12px;
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
 .feed-body {
   display: grid;
-  grid-template-columns: 1.1fr 0.9fr;
-  gap: 12px;
+  grid-template-columns: 1fr;
+  gap: 14px;
 }
 
 .feed-camera {
-  min-height: 116px;
+  min-height: 0;
+  aspect-ratio: 3 / 4;
+  max-height: min(52vh, 460px);
   border-radius: 18px;
   border: 1px solid rgba(255,255,255,0.08);
   background:
@@ -510,8 +519,8 @@ body.app-live .phone-screen {
 .corner.br { bottom: 12px; right: 12px; border-bottom: 2px solid; border-right: 2px solid; }
 
 .target-box {
-  width: 72px;
-  height: 92px;
+  width: min(48%, 180px);
+  height: min(62%, 240px);
   left: 50%;
   top: 50%;
   transform: translate(-50%, -50%);
@@ -531,14 +540,18 @@ body.app-live .phone-screen {
 
 .feed-meta {
   display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
 }
 
 .meta-row {
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
+  display: grid;
+  gap: 4px;
   font-size: 0.88rem;
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
 }
 
 .meta-key {
@@ -546,7 +559,68 @@ body.app-live .phone-screen {
 }
 
 .meta-value {
-  text-align: right;
+  text-align: left;
+}
+
+.registration-card {
+  margin-top: 14px;
+  padding: 14px;
+  border-radius: 18px;
+  border: 1px solid rgba(115, 240, 197, 0.16);
+  background: rgba(115, 240, 197, 0.08);
+}
+
+.registration-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  font-size: 0.88rem;
+}
+
+.registration-badge {
+  color: var(--accent);
+  font-size: 0.76rem;
+}
+
+.registration-copy,
+.registration-status {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 0.83rem;
+  line-height: 1.5;
+}
+
+.registration-form {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.registration-input {
+  width: 100%;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 14px;
+  background: rgba(7, 11, 19, 0.36);
+  color: var(--ink);
+  padding: 12px 14px;
+  font: inherit;
+}
+
+.registration-input::placeholder {
+  color: rgba(255, 255, 255, 0.38);
+}
+
+.registration-button {
+  margin-top: 0;
+}
+
+.registration-status[data-tone="success"] {
+  color: #baf7e4;
+}
+
+.registration-status[data-tone="danger"] {
+  color: #ffd0d0;
 }
 
 .bubble {
@@ -1122,6 +1196,10 @@ body.app-live .phone-screen {
   }
 
   .feed-body {
+    grid-template-columns: 1fr;
+  }
+
+  .feed-meta {
     grid-template-columns: 1fr;
   }
 }

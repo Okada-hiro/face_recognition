@@ -12,6 +12,11 @@ const bubbleUser = document.getElementById("bubble-user");
 const bubbleAi = document.getElementById("bubble-ai");
 const dialogueNote = document.getElementById("dialogue-note");
 const dialogueStage = document.getElementById("dialogue-stage");
+const registrationCard = document.getElementById("registration-card");
+const registrationForm = document.getElementById("registration-form");
+const registrationNameInput = document.getElementById("registration-name");
+const registrationStatus = document.getElementById("registration-status");
+const registrationCopy = document.getElementById("registration-copy");
 const assistantFace = document.getElementById("assistant-face");
 const cameraVideo = document.getElementById("camera-video");
 const feedImage = document.getElementById("feed-image");
@@ -238,6 +243,8 @@ const runtime = {
   pendingGreetingSinceMs: 0,
   unknownFaceFrames: 0,
   faceResultSent: false,
+  registrationPromptVisible: false,
+  registrationSubmitting: false,
   wsRttMs: null,
   lastFrameRttMs: null,
   audioCaptureAnnounced: false,
@@ -265,6 +272,37 @@ function showDialogueNote(message, tone = "muted") {
   dialogueNote.hidden = false;
   dialogueNote.textContent = text;
   dialogueNote.dataset.tone = tone;
+}
+
+function setRegistrationStatus(message = "", tone = "") {
+  if (!registrationStatus) return;
+  registrationStatus.textContent = String(message || "").trim();
+  if (tone) {
+    registrationStatus.dataset.tone = tone;
+  } else {
+    delete registrationStatus.dataset.tone;
+  }
+}
+
+function showRegistrationPrompt(message = "お名前を入力すると、いま見えている顔をデータベースへ追加します。") {
+  if (!registrationCard) return;
+  runtime.registrationPromptVisible = true;
+  registrationCard.hidden = false;
+  if (registrationCopy) {
+    registrationCopy.textContent = message;
+  }
+  setRegistrationStatus("");
+}
+
+function hideRegistrationPrompt() {
+  if (!registrationCard) return;
+  runtime.registrationPromptVisible = false;
+  runtime.registrationSubmitting = false;
+  registrationCard.hidden = true;
+  if (registrationForm) {
+    registrationForm.reset();
+  }
+  setRegistrationStatus("");
 }
 
 function normalizeDialogueNote(status, data = {}) {
@@ -302,12 +340,14 @@ function handleTrackEvents(trackEvents) {
   for (const item of trackEvents) {
     if (!item || !item.event_type) continue;
     if (item.event_type === "approached") {
+      hideRegistrationPrompt();
       sendRecognitionEvent("approach", item.person_id || null);
       runtime.pendingGreeting = true;
       runtime.pendingGreetingSinceMs = performance.now();
       runtime.faceResultSent = false;
       runtime.unknownFaceFrames = 0;
     } else if (item.event_type === "left") {
+      hideRegistrationPrompt();
       sendRecognitionEvent("leave", item.person_id || null);
       runtime.pendingGreeting = false;
       runtime.pendingGreetingSinceMs = 0;
@@ -324,6 +364,7 @@ function updateGreetingDecision(primaryPersonId, faceCount, matchCount) {
   if (runtime.faceResultSent) return;
   const pendingMs = runtime.pendingGreetingSinceMs ? performance.now() - runtime.pendingGreetingSinceMs : 0;
   if (primaryPersonId) {
+    hideRegistrationPrompt();
     runtime.recognizedPersonId = primaryPersonId;
     sendRecognitionEvent("recognized_face", primaryPersonId);
     runtime.pendingGreeting = false;
@@ -595,7 +636,14 @@ async function connectVoiceSocket() {
       if (data.message.includes("接近")) {
         runtime.recognizedPersonId = runtime.recognizedPersonId || runtime.currentIdentity;
       }
+      if (data.message.includes("登録しました。")) {
+        hideRegistrationPrompt();
+      }
       showDialogueNote("");
+    } else if (data.status === "registration_prompt") {
+      const message = String(data.message || "").trim();
+      showRegistrationPrompt(message || "お名前を入力すると、いま見えている顔をデータベースへ追加します。");
+      showDialogueNote(message || "はじめての方は、お名前を入力してください。", "warning");
     } else if (data.status === "processing") {
       runtime.listening = data.message.includes("聞いています");
       runtime.thinking = data.message.includes("思考中");
@@ -626,7 +674,9 @@ async function connectVoiceSocket() {
       }
       runtime.currentAiBubbleText = "";
       resetOrderedAudioState();
-      showDialogueNote("");
+      if (!runtime.registrationPromptVisible) {
+        showDialogueNote("");
+      }
     } else if (data.status === "interrupt") {
       stopAudioPlayback();
       runtime.speaking = false;
@@ -694,6 +744,43 @@ async function initMedia() {
   }
 }
 
+async function submitFaceRegistration(event) {
+  event.preventDefault();
+  if (runtime.registrationSubmitting) return;
+  const personId = String(registrationNameInput?.value || "").trim();
+  if (!personId) {
+    setRegistrationStatus("お名前を入力してください。", "danger");
+    registrationNameInput?.focus();
+    return;
+  }
+  runtime.registrationSubmitting = true;
+  setRegistrationStatus("顔データを登録しています…");
+  try {
+    const response = await fetch(`${VISION_HTTP_BASE}/api/register-face`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ person_id: personId }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(payload.detail || "顔登録に失敗しました。");
+    }
+    runtime.recognizedPersonId = payload.person_id || personId;
+    sendRecognitionEvent("recognized_face", runtime.recognizedPersonId);
+    setRegistrationStatus(`${runtime.recognizedPersonId}さんとして登録しました。`, "success");
+    showDialogueNote(`${runtime.recognizedPersonId}さんとして登録しました。`, "warning");
+    window.setTimeout(() => {
+      hideRegistrationPrompt();
+      refreshVisualState();
+    }, 1200);
+  } catch (error) {
+    setRegistrationStatus(String(error), "danger");
+  } finally {
+    runtime.registrationSubmitting = false;
+    refreshVisualState();
+  }
+}
+
 async function captureAndSendFrame() {
   if (!runtime.stream || runtime.busyFrame || !cameraVideo.videoWidth) return;
   runtime.busyFrame = true;
@@ -742,6 +829,7 @@ async function captureAndSendFrame() {
           ? `${runtime.latestPersonCount}人を検知`
           : "未検知";
     if (!runtime.latestPersonCount && !runtime.latestFaceCount && !runtime.speaking && !runtime.thinking && !runtime.listening) {
+      hideRegistrationPrompt();
       runtime.recognizedPersonId = null;
       runtime.pendingGreeting = false;
       runtime.pendingGreetingSinceMs = 0;
@@ -827,6 +915,7 @@ applyState("idle");
 updateEyeGaze(0.5, 0.42);
 refreshVisualState();
 bootStartButton.addEventListener("click", startApp);
+registrationForm?.addEventListener("submit", submitFaceRegistration);
 window.addEventListener("beforeunload", stopRuntime);
 window.addEventListener("resize", updateViewportMetrics);
 window.visualViewport?.addEventListener("resize", updateViewportMetrics);

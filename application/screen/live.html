@@ -58,6 +58,7 @@
               <span class="feed-title">カメラ映像</span>
               <span class="feed-badge" id="feed-badge">接続中</span>
             </div>
+            <p class="feed-copy">この枠には、端末の前面カメラ映像をそのまま表示しています。</p>
             <div class="feed-body">
               <div class="feed-camera">
                 <img id="feed-image" class="feed-image" alt="annotated recognition frame">
@@ -83,6 +84,27 @@
                   <span class="meta-value" id="meta-mode">待機中</span>
                 </div>
               </div>
+            </div>
+            <div class="registration-card" id="registration-card" hidden>
+              <div class="registration-head">
+                <span>はじめての方の登録</span>
+                <span class="registration-badge">顔データ</span>
+              </div>
+              <p class="registration-copy" id="registration-copy">お名前を入力すると、いま見えている顔をデータベースへ追加します。</p>
+              <form class="registration-form" id="registration-form">
+                <input
+                  class="registration-input"
+                  id="registration-name"
+                  name="person_id"
+                  type="text"
+                  inputmode="text"
+                  autocomplete="name"
+                  placeholder="お名前"
+                  maxlength="64"
+                >
+                <button class="live-primary-button registration-button" id="registration-submit" type="submit">この名前で登録</button>
+              </form>
+              <p class="registration-status" id="registration-status"></p>
             </div>
           </section>
 

@@ -20,6 +20,7 @@ import io
 import json
 import mimetypes
 import os
+import re
 import sys
 import threading
 import wave
@@ -35,6 +36,7 @@ import uvicorn
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, Response
+from pydantic import BaseModel
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
@@ -78,6 +80,15 @@ _voice_tts_lock = threading.Lock()
 _voice_tts_module = None
 _voice_tts_error: str | None = None
 logger = logging.getLogger("recognition_browser")
+_registration_candidate_lock = threading.Lock()
+_registration_candidate_image: np.ndarray | None = None
+_registration_candidate_frame_index = -1
+_registration_candidate_ts = 0.0
+REGISTRATION_CANDIDATE_TTL_SEC = float(os.getenv("RECOGNITION_REGISTRATION_CANDIDATE_TTL_SEC", "30"))
+
+
+class FaceRegistrationPayload(BaseModel):
+    person_id: str
 
 
 def _resolve_relative_path(relative_path: str) -> Path:
@@ -98,6 +109,15 @@ def _format_size(size_bytes: int) -> str:
             return f"{value:.1f} {unit}" if unit != "B" else f"{int(value)} B"
         value /= 1024
     return f"{size_bytes} B"
+
+
+def _normalize_person_id(raw_value: str) -> str:
+    person_id = str(raw_value or "").strip()
+    person_id = re.sub(r"[\\/]+", "_", person_id)
+    person_id = re.sub(r"\s+", " ", person_id).strip()
+    if person_id in {"", ".", ".."}:
+        raise HTTPException(status_code=400, detail="person_id is required.")
+    return person_id[:64]
 
 
 def _render_entry(path: Path) -> str:
@@ -810,6 +830,58 @@ def _select_primary_person_center(event, frame_width: int, frame_height: int) ->
     return center_x / safe_width, center_y / safe_height
 
 
+def _select_primary_face(event):
+    primary_person = _select_primary_person(event)
+    if primary_person is not None:
+        attached_faces = [face for face in event.faces if getattr(face, "person_track_id", None) == primary_person.track_id]
+        if attached_faces:
+            return max(attached_faces, key=lambda face: face.bbox.area)
+    if event.faces:
+        return max(event.faces, key=lambda face: face.bbox.area)
+    return None
+
+
+def _crop_face_with_margin(image: np.ndarray, bbox, margin_ratio: float = 0.24) -> np.ndarray | None:
+    frame_h, frame_w = image.shape[:2]
+    pad_x = int(bbox.width * margin_ratio)
+    pad_y = int(bbox.height * margin_ratio)
+    x1 = max(0, bbox.x1 - pad_x)
+    y1 = max(0, bbox.y1 - pad_y)
+    x2 = min(frame_w, bbox.x2 + pad_x)
+    y2 = min(frame_h, bbox.y2 + pad_y)
+    if x2 <= x1 or y2 <= y1:
+        return None
+    crop = image[y1:y2, x1:x2]
+    if crop.size <= 0:
+        return None
+    return crop.copy()
+
+
+def _set_registration_candidate(image: np.ndarray, frame_index: int) -> None:
+    global _registration_candidate_image, _registration_candidate_frame_index, _registration_candidate_ts
+    with _registration_candidate_lock:
+        _registration_candidate_image = image.copy()
+        _registration_candidate_frame_index = frame_index
+        _registration_candidate_ts = datetime.utcnow().timestamp()
+
+
+def _pop_registration_candidate() -> tuple[np.ndarray, int]:
+    global _registration_candidate_image, _registration_candidate_frame_index, _registration_candidate_ts
+    with _registration_candidate_lock:
+        image = _registration_candidate_image
+        frame_index = _registration_candidate_frame_index
+        captured_at = _registration_candidate_ts
+        if image is None:
+            raise HTTPException(status_code=409, detail="登録用の顔画像がまだありません。カメラに顔を映してから再試行してください。")
+        age_sec = max(0.0, datetime.utcnow().timestamp() - captured_at)
+        if age_sec > REGISTRATION_CANDIDATE_TTL_SEC:
+            _registration_candidate_image = None
+            raise HTTPException(status_code=409, detail="登録用の顔画像が古くなりました。もう一度カメラを見てください。")
+        image_copy = image.copy()
+        _registration_candidate_image = None
+    return image_copy, frame_index
+
+
 @app.get("/health")
 async def health() -> dict[str, object]:
     return {"ok": True, "root": str(ROOT_DIR), "port": PORT}
@@ -918,6 +990,12 @@ async def live_frame(frame: UploadFile = File(...), save_snapshot: str = Form(de
     if event.track_events:
         await asyncio.to_thread(_notify_voice_talk, event.track_events)
 
+    primary_face = _select_primary_face(event)
+    if primary_face is not None:
+        crop = _crop_face_with_margin(image, primary_face.bbox)
+        if crop is not None:
+            _set_registration_candidate(crop, frame_index)
+
     ok, encoded = cv2.imencode(".jpg", annotated, [int(cv2.IMWRITE_JPEG_QUALITY), LIVE_JPEG_QUALITY])
     if not ok:
         raise HTTPException(status_code=500, detail="Failed to encode annotated frame.")
@@ -941,6 +1019,38 @@ async def live_frame(frame: UploadFile = File(...), save_snapshot: str = Form(de
         ),
     }
     return Response(content=encoded.tobytes(), media_type="image/jpeg", headers=headers)
+
+
+@app.post("/api/register-face")
+async def register_face(payload: FaceRegistrationPayload) -> JSONResponse:
+    person_id = _normalize_person_id(payload.person_id)
+    crop, frame_index = _pop_registration_candidate()
+    target_dir = LIVE_DATABASE_DIR / person_id
+    target_dir.mkdir(parents=True, exist_ok=True)
+    filename = datetime.utcnow().strftime("%Y%m%d_%H%M%S_%f") + ".jpg"
+    target_path = target_dir / filename
+    ok = cv2.imwrite(str(target_path), crop)
+    if not ok:
+        raise HTTPException(status_code=500, detail="顔画像の保存に失敗しました。")
+
+    with _live_monitor_lock:
+        monitor = _get_live_monitor()
+        monitor.database.build()
+
+    logger.info(
+        "[FACE_REGISTER] person_id=%s frame=%d saved=%s",
+        person_id,
+        frame_index,
+        target_path,
+    )
+    return JSONResponse(
+        {
+            "ok": True,
+            "person_id": person_id,
+            "saved_path": str(target_path),
+            "frame_index": frame_index,
+        }
+    )
 
 
 @app.get("/api/live-utterance")

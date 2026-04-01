@@ -297,6 +297,7 @@ async def _handle_approach(person_id: str | None) -> dict[str, object]:
 async def _handle_face_recognition(person_id: str | None, known_face: bool) -> dict[str, object]:
     async with STATE_LOCK:
         bootstrapped = False
+        promoted_after_unknown = False
         if not STATE.active:
             STATE.active = True
             STATE.person_id = None
@@ -304,12 +305,26 @@ async def _handle_face_recognition(person_id: str | None, known_face: bool) -> d
             STATE.recognition_pending = True
             bootstrapped = True
         if STATE.greeted:
-            return {"ok": True, "active": True, "person_id": STATE.person_id, "already_greeted": True}
+            if known_face and person_id and not STATE.person_id:
+                STATE.person_id = person_id
+                STATE.recognition_pending = False
+                promoted_after_unknown = True
+            else:
+                return {"ok": True, "active": True, "person_id": STATE.person_id, "already_greeted": True}
         STATE.person_id = person_id if known_face else None
         STATE.greeted = True
         STATE.recognition_pending = False
     if bootstrapped:
         base.logger.info("[FACE_RESULT] bootstrapped_without_approach known_face=%s person_id=%s", known_face, person_id)
+    if promoted_after_unknown:
+        await _broadcast_json(
+            {
+                "status": "system_info",
+                "message": f"{person_id}さんとして登録しました。",
+            }
+        )
+        base.logger.info("[FACE_RESULT] promoted_after_unknown person_id=%s", person_id)
+        return {"ok": True, "active": True, "person_id": person_id, "known_face": True, "promoted_after_unknown": True}
     await _broadcast_json(
         {
             "status": "system_info",
@@ -321,6 +336,13 @@ async def _handle_face_recognition(person_id: str | None, known_face: bool) -> d
         }
     )
     await _broadcast_greeting(person_id if known_face else None, known_face)
+    if not known_face:
+        await _broadcast_json(
+            {
+                "status": "registration_prompt",
+                "message": "はじめての方は、お名前を入力すると顔を登録できます。",
+            }
+        )
     base.logger.info("[FACE_RESULT] known_face=%s person_id=%s", known_face, person_id)
     return {"ok": True, "active": True, "person_id": person_id if known_face else None, "known_face": known_face}
 

@@ -4,21 +4,38 @@ const heroSubtitle = document.getElementById("hero-subtitle");
 const statePill = document.getElementById("state-pill");
 const orbitText = document.getElementById("orbit-text");
 const feedBadge = document.getElementById("feed-badge");
+const feedBadgeOverlay = document.getElementById("feed-badge-overlay");
 const targetLabel = document.getElementById("target-label");
 const metaTarget = document.getElementById("meta-target");
 const metaIdentity = document.getElementById("meta-identity");
 const metaMode = document.getElementById("meta-mode");
 const bubbleUser = document.getElementById("bubble-user");
 const bubbleAi = document.getElementById("bubble-ai");
+const phoneScreenAlert = document.getElementById("phone-screen-alert");
 const dialogueNote = document.getElementById("dialogue-note");
 const dialogueStage = document.getElementById("dialogue-stage");
 const registrationCard = document.getElementById("registration-card");
 const registrationForm = document.getElementById("registration-form");
-const registrationNameInput = document.getElementById("registration-name");
+const registrationExistingForm = document.getElementById("registration-existing-form");
+const registrationTitle = document.getElementById("registration-title");
+const registrationChoiceActions = document.getElementById("registration-choice-actions");
+const registrationChoiceYes = document.getElementById("registration-choice-yes");
+const registrationChoiceExisting = document.getElementById("registration-choice-existing");
+const registrationChoiceNo = document.getElementById("registration-choice-no");
+const registrationExistingNameInput = document.getElementById("registration-existing-name");
+const registrationBackFromExisting = document.getElementById("registration-back-from-existing");
+const registrationBackFromNew = document.getElementById("registration-back-from-new");
+const registrationLastNameInput = document.getElementById("registration-last-name");
+const registrationFirstNameInput = document.getElementById("registration-first-name");
+const registrationLastReadingInput = document.getElementById("registration-last-reading");
+const registrationFirstReadingInput = document.getElementById("registration-first-reading");
 const registrationStatus = document.getElementById("registration-status");
 const registrationCopy = document.getElementById("registration-copy");
 const assistantFace = document.getElementById("assistant-face");
 const cameraVideo = document.getElementById("camera-video");
+const miniCameraFloat = document.getElementById("mini-camera-float");
+const miniCameraVideo = document.getElementById("mini-camera-video");
+const feedCamera = document.querySelector(".feed-camera");
 const feedImage = document.getElementById("feed-image");
 const captureCanvas = document.getElementById("capture-canvas");
 const bootOverlay = document.getElementById("app-boot");
@@ -108,9 +125,9 @@ try {
 
 const STATES = {
   idle: {
-    pill: "待機",
+    pill: "",
     title: "待機中",
-    subtitle: "人が近づくと顔認識と会話を開始します。",
+    subtitle: "",
     orbit: "待機中",
     badge: "対象なし",
     target: "未検知",
@@ -121,9 +138,9 @@ const STATES = {
     dialogue: "待機中",
   },
   detecting: {
-    pill: "検知",
+    pill: "",
     title: "人物を検知しました",
-    subtitle: "前方の人物を追跡しています。",
+    subtitle: "",
     orbit: "追跡中",
     badge: "人物検知",
     target: "人物を追跡中",
@@ -134,9 +151,9 @@ const STATES = {
     dialogue: "追跡中",
   },
   recognized: {
-    pill: "一致",
+    pill: "",
     title: "顔認識に成功",
-    subtitle: "社員データベースとの照合が完了しました。",
+    subtitle: "",
     orbit: "照合完了",
     badge: "顔を認識",
     target: "対象を特定",
@@ -147,9 +164,9 @@ const STATES = {
     dialogue: "認識完了",
   },
   listening: {
-    pill: "傾聴",
+    pill: "",
     title: "AIが聞いています",
-    subtitle: "用件を音声で受け付けています。",
+    subtitle: "",
     orbit: "音声受付",
     badge: "音声入力",
     target: "発話中",
@@ -160,9 +177,9 @@ const STATES = {
     dialogue: "聞き取り中",
   },
   thinking: {
-    pill: "応答",
+    pill: "",
     title: "回答を考えています",
-    subtitle: "音声と認識情報をもとに返答を生成しています。",
+    subtitle: "",
     orbit: "応答生成",
     badge: "処理中",
     target: "文脈を整理",
@@ -173,9 +190,9 @@ const STATES = {
     dialogue: "考え中",
   },
   speaking: {
-    pill: "発話",
+    pill: "",
     title: "AIが話しています",
-    subtitle: "案内内容を音声で返答しています。",
+    subtitle: "",
     orbit: "音声案内",
     badge: "音声出力",
     target: "応対中",
@@ -186,9 +203,9 @@ const STATES = {
     dialogue: "発話中",
   },
   farewell: {
-    pill: "終了",
+    pill: "",
     title: "見送りモード",
-    subtitle: "会話を終えて待機に戻ります。",
+    subtitle: "",
     orbit: "終了処理",
     badge: "離脱検知",
     target: "退出を検知",
@@ -214,6 +231,7 @@ const runtime = {
   thinking: false,
   listening: false,
   recognizedPersonId: null,
+  recognizedPersonReading: null,
   latestPersonCount: 0,
   latestFaceCount: 0,
   latestIntervalMs: 800,
@@ -245,9 +263,17 @@ const runtime = {
   faceResultSent: false,
   registrationPromptVisible: false,
   registrationSubmitting: false,
+  registrationMode: "hidden",
+  identityHoldUntilMs: 0,
+  lastFaceSeenAtMs: 0,
   wsRttMs: null,
   lastFrameRttMs: null,
   audioCaptureAnnounced: false,
+  feedIntersectionRatio: 1,
+  miniCameraPinned: false,
+  miniCameraDragPointerId: null,
+  miniCameraDragOffsetX: 0,
+  miniCameraDragOffsetY: 0,
 };
 
 function updateEyeGaze(centerX = 0.5, centerY = 0.42) {
@@ -267,11 +293,13 @@ function showDialogueNote(message, tone = "muted") {
     dialogueNote.hidden = true;
     dialogueNote.textContent = "";
     dialogueNote.dataset.tone = "muted";
+    phoneScreenAlert?.classList.remove("has-alert");
     return;
   }
   dialogueNote.hidden = false;
   dialogueNote.textContent = text;
   dialogueNote.dataset.tone = tone;
+  phoneScreenAlert?.classList.add("has-alert");
 }
 
 function setRegistrationStatus(message = "", tone = "") {
@@ -288,9 +316,7 @@ function showRegistrationPrompt(message = "お名前を入力すると、いま�
   if (!registrationCard) return;
   runtime.registrationPromptVisible = true;
   registrationCard.hidden = false;
-  if (registrationCopy) {
-    registrationCopy.textContent = message;
-  }
+  setRegistrationMode("choice", message);
   setRegistrationStatus("");
 }
 
@@ -298,11 +324,128 @@ function hideRegistrationPrompt() {
   if (!registrationCard) return;
   runtime.registrationPromptVisible = false;
   runtime.registrationSubmitting = false;
+  runtime.registrationMode = "hidden";
   registrationCard.hidden = true;
+  screenEl?.classList.remove("is-registration-mode");
   if (registrationForm) {
     registrationForm.reset();
   }
+  if (registrationExistingForm) {
+    registrationExistingForm.reset();
+  }
   setRegistrationStatus("");
+  if (miniCameraFloat) {
+    miniCameraFloat.classList.remove("is-draggable");
+    miniCameraFloat.style.left = "";
+    miniCameraFloat.style.top = "";
+    miniCameraFloat.style.right = "";
+  }
+  runtime.miniCameraPinned = false;
+}
+
+function setRegistrationMode(mode, message = "") {
+  if (!registrationCard) return;
+  runtime.registrationMode = mode;
+  runtime.registrationPromptVisible = mode !== "hidden";
+  registrationCard.hidden = mode === "hidden";
+  registrationCard.dataset.mode = mode;
+  if (registrationCopy) {
+    registrationCopy.textContent =
+      String(message || "").trim() ||
+      (mode === "choice"
+        ? "はじめての方ですか？"
+        : mode === "existing"
+          ? "登録済みのお名前を漢字で入力してください。"
+          : "名字・名前・ふりがなを入力してください。");
+  }
+  if (registrationTitle) {
+    registrationTitle.textContent =
+      mode === "existing" ? "登録済みの確認" : mode === "new" ? "新規登録" : "お名前の確認";
+  }
+  if (registrationChoiceActions) {
+    registrationChoiceActions.hidden = mode !== "choice";
+  }
+  if (registrationExistingForm) {
+    registrationExistingForm.hidden = mode !== "existing";
+  }
+  if (registrationForm) {
+    registrationForm.hidden = mode !== "new";
+  }
+  const registrationActive = mode === "new" || mode === "existing";
+  screenEl?.classList.toggle("is-registration-mode", registrationActive);
+  if (miniCameraFloat) {
+    miniCameraFloat.classList.toggle("is-draggable", registrationActive);
+  }
+  runtime.miniCameraPinned = registrationActive;
+  if (!registrationActive && miniCameraFloat) {
+    miniCameraFloat.style.left = "";
+    miniCameraFloat.style.top = "";
+    miniCameraFloat.style.right = "";
+  }
+  window.setTimeout(() => {
+    if (mode === "existing") {
+      registrationExistingNameInput?.focus();
+    } else if (mode === "new") {
+      registrationLastNameInput?.focus();
+    }
+  }, 40);
+}
+
+function splitNameCandidate(fullName = "") {
+  const clean = String(fullName || "").trim();
+  if (!clean) {
+    return { lastName: "", firstName: "" };
+  }
+  const spaced = clean.split(/\s+/).filter(Boolean);
+  if (spaced.length >= 2) {
+    return {
+      lastName: spaced[0],
+      firstName: spaced.slice(1).join(""),
+    };
+  }
+  return { lastName: "", firstName: "" };
+}
+
+function splitReadingCandidate(fullReading = "") {
+  const clean = String(fullReading || "").trim();
+  if (!clean) {
+    return { lastReading: "", firstReading: "" };
+  }
+  const spaced = clean.split(/\s+/).filter(Boolean);
+  if (spaced.length >= 2) {
+    return {
+      lastReading: spaced[0],
+      firstReading: spaced.slice(1).join(""),
+    };
+  }
+  return { lastReading: "", firstReading: "" };
+}
+
+function fillRegistrationInputs(personId = "", personReading = "") {
+  const { lastName, firstName } = splitNameCandidate(personId);
+  const { lastReading, firstReading } = splitReadingCandidate(personReading);
+  if (registrationLastNameInput) registrationLastNameInput.value = lastName;
+  if (registrationFirstNameInput) registrationFirstNameInput.value = firstName;
+  if (registrationLastReadingInput) registrationLastReadingInput.value = lastReading;
+  if (registrationFirstReadingInput) registrationFirstReadingInput.value = firstReading;
+  if (registrationExistingNameInput) registrationExistingNameInput.value = personId;
+}
+
+function getRegistrationPayloadFromInputs() {
+  const lastName = String(registrationLastNameInput?.value || "").trim();
+  const firstName = String(registrationFirstNameInput?.value || "").trim();
+  const lastReading = String(registrationLastReadingInput?.value || "").trim();
+  const firstReading = String(registrationFirstReadingInput?.value || "").trim();
+  const personId = `${lastName}${firstName}`.trim();
+  const personReading = `${lastReading}${firstReading}`.trim();
+  return {
+    person_id: personId,
+    person_reading: personReading,
+    person_last_name: lastName,
+    person_first_name: firstName,
+    person_last_reading: lastReading,
+    person_first_reading: firstReading,
+  };
 }
 
 function normalizeDialogueNote(status, data = {}) {
@@ -327,12 +470,13 @@ function normalizeDialogueNote(status, data = {}) {
   return { text: rawMessage, tone: "muted" };
 }
 
-function sendRecognitionEvent(eventName, personId = null) {
+function sendRecognitionEvent(eventName, personId = null, personReading = null) {
   if (!runtime.ws || runtime.ws.readyState !== WebSocket.OPEN) return;
   runtime.ws.send(JSON.stringify({
     type: "recognition_event",
     event: eventName,
     person_id: personId,
+    person_reading: personReading,
   }));
 }
 
@@ -341,32 +485,41 @@ function handleTrackEvents(trackEvents) {
     if (!item || !item.event_type) continue;
     if (item.event_type === "approached") {
       hideRegistrationPrompt();
-      sendRecognitionEvent("approach", item.person_id || null);
+      sendRecognitionEvent("approach", item.person_id || null, runtime.recognizedPersonReading || null);
       runtime.pendingGreeting = true;
       runtime.pendingGreetingSinceMs = performance.now();
       runtime.faceResultSent = false;
       runtime.unknownFaceFrames = 0;
     } else if (item.event_type === "left") {
+      const now = performance.now();
+      const recentFaceSeen = now - runtime.lastFaceSeenAtMs < 2200;
+      const inIdentityHold = now < runtime.identityHoldUntilMs;
+      const leavingCurrentIdentity = Boolean(item.person_id) && item.person_id === runtime.recognizedPersonId;
+      if (leavingCurrentIdentity && (inIdentityHold || recentFaceSeen)) {
+        continue;
+      }
       hideRegistrationPrompt();
-      sendRecognitionEvent("leave", item.person_id || null);
+      sendRecognitionEvent("leave", item.person_id || null, runtime.recognizedPersonReading || null);
       runtime.pendingGreeting = false;
       runtime.pendingGreetingSinceMs = 0;
       runtime.faceResultSent = false;
       runtime.unknownFaceFrames = 0;
       if (!item.person_id || item.person_id === runtime.recognizedPersonId) {
         runtime.recognizedPersonId = null;
+        runtime.recognizedPersonReading = null;
       }
     }
   }
 }
 
 function updateGreetingDecision(primaryPersonId, faceCount, matchCount) {
+  if (performance.now() < runtime.identityHoldUntilMs) return;
   if (runtime.faceResultSent) return;
   const pendingMs = runtime.pendingGreetingSinceMs ? performance.now() - runtime.pendingGreetingSinceMs : 0;
   if (primaryPersonId) {
     hideRegistrationPrompt();
     runtime.recognizedPersonId = primaryPersonId;
-    sendRecognitionEvent("recognized_face", primaryPersonId);
+    sendRecognitionEvent("recognized_face", primaryPersonId, runtime.recognizedPersonReading || null);
     runtime.pendingGreeting = false;
     runtime.pendingGreetingSinceMs = 0;
     runtime.faceResultSent = true;
@@ -432,13 +585,18 @@ function applyState(state, overrides = {}) {
   statePill.textContent = config.pill;
   orbitText.textContent = config.orbit;
   feedBadge.textContent = config.badge;
-  targetLabel.textContent = String(config.badge || "").toLowerCase();
+  if (feedBadgeOverlay) {
+    feedBadgeOverlay.textContent = config.badge;
+  }
+  targetLabel.textContent = config.target;
   metaTarget.textContent = config.target;
   metaIdentity.textContent = config.identity;
   metaMode.textContent = config.mode;
   bubbleUser.textContent = config.user;
   bubbleAi.textContent = config.ai;
   dialogueStage.textContent = config.dialogue;
+  heroSubtitle.hidden = !config.subtitle;
+  statePill.hidden = !config.pill;
 }
 
 function computeNextInterval(personCount, faceCount) {
@@ -496,7 +654,75 @@ function refreshVisualState() {
   const frameRtt = runtime.lastFrameRttMs == null ? "-" : `${Math.round(runtime.lastFrameRttMs)}ms`;
   const wsRtt = runtime.wsRttMs == null ? "-" : `${Math.round(runtime.wsRttMs)}ms`;
   debugPill.textContent = `人物 ${runtime.latestPersonCount} / 顔 ${runtime.latestFaceCount} | ${dialogueStage.textContent} | 映像 ${frameRtt} | 音声 ${wsRtt}`;
-  updateEyeGaze(runtime.latestTargetCenterX, runtime.latestTargetCenterY);
+  if (!screenEl?.classList.contains("is-registration-mode")) {
+    updateEyeGaze(runtime.latestTargetCenterX, runtime.latestTargetCenterY);
+  }
+  updateMiniCameraVisibility();
+}
+
+function updateMiniCameraVisibility() {
+  if (!miniCameraFloat) return;
+  const shouldShow =
+    runtime.started &&
+    Boolean(bootOverlay?.classList.contains("is-hidden")) &&
+    (runtime.feedIntersectionRatio < 0.5 || runtime.miniCameraPinned);
+  miniCameraFloat.hidden = !shouldShow;
+}
+
+function startMiniCameraDrag(event) {
+  if (!miniCameraFloat || !runtime.miniCameraPinned) return;
+  const rect = miniCameraFloat.getBoundingClientRect();
+  runtime.miniCameraDragPointerId = event.pointerId;
+  runtime.miniCameraDragOffsetX = event.clientX - rect.left;
+  runtime.miniCameraDragOffsetY = event.clientY - rect.top;
+  miniCameraFloat.setPointerCapture?.(event.pointerId);
+  event.preventDefault();
+}
+
+function moveMiniCameraDrag(event) {
+  if (!miniCameraFloat || runtime.miniCameraDragPointerId !== event.pointerId) return;
+  const maxLeft = Math.max(8, window.innerWidth - miniCameraFloat.offsetWidth - 8);
+  const maxTop = Math.max(8, window.innerHeight - miniCameraFloat.offsetHeight - 8);
+  const nextLeft = Math.max(8, Math.min(maxLeft, event.clientX - runtime.miniCameraDragOffsetX));
+  const nextTop = Math.max(8, Math.min(maxTop, event.clientY - runtime.miniCameraDragOffsetY));
+  miniCameraFloat.style.left = `${nextLeft}px`;
+  miniCameraFloat.style.top = `${nextTop}px`;
+  miniCameraFloat.style.right = "auto";
+}
+
+function endMiniCameraDrag(event) {
+  if (!miniCameraFloat || runtime.miniCameraDragPointerId !== event.pointerId) return;
+  miniCameraFloat.releasePointerCapture?.(event.pointerId);
+  runtime.miniCameraDragPointerId = null;
+}
+
+async function resolveRegisteredPersonByName(personId) {
+  const response = await fetch("/api/face-database");
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload.detail || "登録済みデータベースを取得できませんでした。");
+  }
+  const rows = Array.isArray(payload?.rows) ? payload.rows : Array.isArray(payload) ? payload : [];
+  const matched = rows.find((item) => String(item?.person_id || "").trim() === personId);
+  if (!matched) {
+    throw new Error("そのお名前はデータベースに見つかりませんでした。");
+  }
+  return matched;
+}
+
+function setupFeedVisibilityObserver() {
+  if (!feedCamera || typeof IntersectionObserver === "undefined") return;
+  const observer = new IntersectionObserver(
+    (entries) => {
+      const entry = entries[0];
+      runtime.feedIntersectionRatio = entry ? entry.intersectionRatio : 1;
+      updateMiniCameraVisibility();
+    },
+    {
+      threshold: [0, 0.25, 0.5, 0.75, 1],
+    }
+  );
+  observer.observe(feedCamera);
 }
 
 function scheduleNextFrame(delayMs) {
@@ -643,7 +869,29 @@ async function connectVoiceSocket() {
     } else if (data.status === "registration_prompt") {
       const message = String(data.message || "").trim();
       showRegistrationPrompt(message || "お名前を入力すると、いま見えている顔をデータベースへ追加します。");
-      showDialogueNote(message || "はじめての方は、お名前を入力してください。", "warning");
+      showDialogueNote(message || "はじめての方ですか？", "warning");
+    } else if (data.status === "registration_candidate") {
+      const message = String(data.message || "").trim();
+      const personId = String(data.person_id || "").trim();
+      const personReading = String(data.person_reading || "").trim();
+      setRegistrationMode("existing", message || "登録済みのお名前を漢字で入力してください。");
+      fillRegistrationInputs(personId, personReading);
+      if (personReading) {
+        runtime.recognizedPersonReading = personReading;
+      }
+      showDialogueNote(message || "お名前を確認しています。", "warning");
+    } else if (data.status === "registration_commit") {
+      const personId = String(data.person_id || "").trim();
+      const personReading = String(data.person_reading || "").trim();
+      if (personId) {
+        fillRegistrationInputs(personId, personReading);
+        setRegistrationStatus(`${personId}さんとして登録しています…`);
+        setRegistrationMode("new", "確認した内容で顔データを登録しています。");
+        await performFaceRegistration({
+          person_id: personId,
+          person_reading: personReading,
+        });
+      }
     } else if (data.status === "processing") {
       runtime.listening = data.message.includes("聞いています");
       runtime.thinking = data.message.includes("思考中");
@@ -720,7 +968,13 @@ async function initMedia() {
     audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
   });
   cameraVideo.srcObject = runtime.stream;
+  if (miniCameraVideo) {
+    miniCameraVideo.srcObject = runtime.stream;
+  }
   await cameraVideo.play();
+  if (miniCameraVideo) {
+    await miniCameraVideo.play().catch(() => {});
+  }
 
   runtime.audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
   const audioTracks = new MediaStream(runtime.stream.getAudioTracks());
@@ -742,37 +996,107 @@ async function initMedia() {
   if (runtime.audioContext.state === "suspended") {
     await runtime.audioContext.resume();
   }
+  updateMiniCameraVisibility();
 }
 
-async function submitFaceRegistration(event) {
-  event.preventDefault();
+async function performFaceRegistration(registrationPayload) {
   if (runtime.registrationSubmitting) return;
-  const personId = String(registrationNameInput?.value || "").trim();
-  if (!personId) {
-    setRegistrationStatus("お名前を入力してください。", "danger");
-    registrationNameInput?.focus();
+  const payload = {
+    person_id: String(registrationPayload?.person_id || "").trim(),
+    person_reading: String(registrationPayload?.person_reading || "").trim(),
+    person_last_name: String(registrationPayload?.person_last_name || "").trim(),
+    person_first_name: String(registrationPayload?.person_first_name || "").trim(),
+    person_last_reading: String(registrationPayload?.person_last_reading || "").trim(),
+    person_first_reading: String(registrationPayload?.person_first_reading || "").trim(),
+  };
+  const hasAnyStructuredField = Boolean(
+    payload.person_last_name || payload.person_first_name || payload.person_last_reading || payload.person_first_reading
+  );
+  if (!payload.person_id) {
+    setRegistrationStatus("名字と名前を入力してください。", "danger");
+    registrationLastNameInput?.focus();
+    return;
+  }
+  if (hasAnyStructuredField && (!payload.person_last_name || !payload.person_first_name)) {
+    setRegistrationStatus("名字と名前を分けて入力してください。", "danger");
+    registrationLastNameInput?.focus();
+    return;
+  }
+  if (hasAnyStructuredField && (!payload.person_last_reading || !payload.person_first_reading)) {
+    setRegistrationStatus("名字と名前のふりがなも入力してください。", "danger");
+    if (!payload.person_last_reading) {
+      registrationLastReadingInput?.focus();
+    } else {
+      registrationFirstReadingInput?.focus();
+    }
     return;
   }
   runtime.registrationSubmitting = true;
   setRegistrationStatus("顔データを登録しています…");
   try {
-    const response = await fetch(`${VISION_HTTP_BASE}/api/register-face`, {
+    const response = await fetch(`/api/register-face`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ person_id: personId }),
+      body: JSON.stringify(payload),
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
       throw new Error(payload.detail || "顔登録に失敗しました。");
     }
-    runtime.recognizedPersonId = payload.person_id || personId;
-    sendRecognitionEvent("recognized_face", runtime.recognizedPersonId);
+    runtime.recognizedPersonId = payload.person_id || registrationPayload.person_id;
+    runtime.recognizedPersonReading =
+      payload.person_reading || registrationPayload.person_reading || runtime.recognizedPersonReading;
+    runtime.identityHoldUntilMs = performance.now() + 12000;
+    runtime.faceResultSent = true;
+    runtime.pendingGreeting = false;
+    runtime.pendingGreetingSinceMs = 0;
+    runtime.unknownFaceFrames = 0;
+    sendRecognitionEvent("recognized_face", runtime.recognizedPersonId, runtime.recognizedPersonReading || null);
     setRegistrationStatus(`${runtime.recognizedPersonId}さんとして登録しました。`, "success");
     showDialogueNote(`${runtime.recognizedPersonId}さんとして登録しました。`, "warning");
     window.setTimeout(() => {
       hideRegistrationPrompt();
       refreshVisualState();
     }, 1200);
+  } catch (error) {
+    setRegistrationStatus(String(error), "danger");
+  } finally {
+    runtime.registrationSubmitting = false;
+    refreshVisualState();
+  }
+}
+
+async function submitFaceRegistration(event) {
+  event.preventDefault();
+  await performFaceRegistration(getRegistrationPayloadFromInputs());
+}
+
+async function submitExistingPerson(event) {
+  event.preventDefault();
+  const personId = String(registrationExistingNameInput?.value || "").trim();
+  if (!personId) {
+    setRegistrationStatus("登録済みのお名前を入力してください。", "danger");
+    registrationExistingNameInput?.focus();
+    return;
+  }
+  runtime.registrationSubmitting = true;
+  setRegistrationStatus("登録済みデータベースを確認しています…");
+  try {
+    const matched = await resolveRegisteredPersonByName(personId);
+    runtime.recognizedPersonId = String(matched.person_id || personId).trim();
+    runtime.recognizedPersonReading = String(matched.person_reading || "").trim();
+    runtime.identityHoldUntilMs = performance.now() + 12000;
+    runtime.faceResultSent = true;
+    runtime.pendingGreeting = false;
+    runtime.pendingGreetingSinceMs = 0;
+    runtime.unknownFaceFrames = 0;
+    sendRecognitionEvent("recognized_face", runtime.recognizedPersonId, runtime.recognizedPersonReading || null);
+    setRegistrationStatus(`${runtime.recognizedPersonId}さんとして続行します。`, "success");
+    showDialogueNote(`${runtime.recognizedPersonId}さんとして続行します。`, "warning");
+    window.setTimeout(() => {
+      hideRegistrationPrompt();
+      refreshVisualState();
+    }, 900);
   } catch (error) {
     setRegistrationStatus(String(error), "danger");
   } finally {
@@ -811,11 +1135,17 @@ async function captureAndSendFrame() {
     const matchCount = Number(response.headers.get("x-match-count") || "0");
     runtime.latestPersonCount = Number(response.headers.get("x-person-count") || "0");
     runtime.latestFaceCount = Number(response.headers.get("x-face-count") || "0");
+    if (runtime.latestFaceCount > 0) {
+      runtime.lastFaceSeenAtMs = performance.now();
+    }
     runtime.latestTargetCenterX = Number(response.headers.get("x-primary-person-cx") || "0.5");
     runtime.latestTargetCenterY = Number(response.headers.get("x-primary-person-cy") || "0.42");
     const primaryPersonIdRaw = response.headers.get("x-primary-person-id") || "";
+    const primaryPersonReadingRaw = response.headers.get("x-primary-person-reading") || "";
     const primaryPersonId = primaryPersonIdRaw ? decodeURIComponent(primaryPersonIdRaw) : "";
+    const primaryPersonReading = primaryPersonReadingRaw ? decodeURIComponent(primaryPersonReadingRaw) : "";
     runtime.recognizedPersonId = primaryPersonId || runtime.recognizedPersonId;
+    runtime.recognizedPersonReading = primaryPersonReading || runtime.recognizedPersonReading;
     runtime.latestTrackEvents = JSON.parse(response.headers.get("x-track-events") || "[]");
     handleTrackEvents(runtime.latestTrackEvents);
     updateGreetingDecision(primaryPersonId, runtime.latestFaceCount, matchCount);
@@ -831,6 +1161,7 @@ async function captureAndSendFrame() {
     if (!runtime.latestPersonCount && !runtime.latestFaceCount && !runtime.speaking && !runtime.thinking && !runtime.listening) {
       hideRegistrationPrompt();
       runtime.recognizedPersonId = null;
+      runtime.recognizedPersonReading = null;
       runtime.pendingGreeting = false;
       runtime.pendingGreetingSinceMs = 0;
       runtime.faceResultSent = false;
@@ -914,8 +1245,19 @@ updateViewportMetrics();
 applyState("idle");
 updateEyeGaze(0.5, 0.42);
 refreshVisualState();
+setupFeedVisibilityObserver();
 bootStartButton.addEventListener("click", startApp);
 registrationForm?.addEventListener("submit", submitFaceRegistration);
+registrationExistingForm?.addEventListener("submit", submitExistingPerson);
+registrationChoiceYes?.addEventListener("click", () => setRegistrationMode("new", "名字・名前・ふりがなを入力してください。"));
+registrationChoiceExisting?.addEventListener("click", () => setRegistrationMode("existing", "登録済みのお名前を漢字で入力してください。"));
+registrationChoiceNo?.addEventListener("click", () => hideRegistrationPrompt());
+registrationBackFromExisting?.addEventListener("click", () => setRegistrationMode("choice", "はじめての方ですか？"));
+registrationBackFromNew?.addEventListener("click", () => setRegistrationMode("choice", "はじめての方ですか？"));
+miniCameraFloat?.addEventListener("pointerdown", startMiniCameraDrag);
+window.addEventListener("pointermove", moveMiniCameraDrag);
+window.addEventListener("pointerup", endMiniCameraDrag);
+window.addEventListener("pointercancel", endMiniCameraDrag);
 window.addEventListener("beforeunload", stopRuntime);
 window.addEventListener("resize", updateViewportMetrics);
 window.visualViewport?.addEventListener("resize", updateViewportMetrics);

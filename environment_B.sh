@@ -7,6 +7,7 @@ PYTHON_BIN="${PYTHON_BIN:-python3}"
 VENV_DIR="${VENV_DIR:-$REPO_ROOT/.venv}"
 SKIP_VENV="${SKIP_VENV:-0}"
 WHISPER_STREAMING_DIR="${WHISPER_STREAMING_DIR:-$REPO_ROOT/whisper_streaming}"
+SILERO_VAD_DIR="${SILERO_VAD_DIR:-$REPO_ROOT/silero-vad}"
 
 cd "$REPO_ROOT"
 
@@ -41,6 +42,13 @@ if [[ ! -d "$WHISPER_STREAMING_DIR" ]]; then
   git clone https://github.com/ufal/whisper_streaming.git "$WHISPER_STREAMING_DIR"
 else
   echo "[3/8] whisper_streaming already exists: $WHISPER_STREAMING_DIR"
+fi
+
+if [[ ! -d "$SILERO_VAD_DIR" ]]; then
+  echo "[3.5/8] Cloning silero-vad into $SILERO_VAD_DIR ..."
+  git clone https://github.com/snakers4/silero-vad.git "$SILERO_VAD_DIR"
+else
+  echo "[3.5/8] silero-vad already exists: $SILERO_VAD_DIR"
 fi
 
 echo "[4/8] Installing OS packages..."
@@ -82,6 +90,7 @@ Recommended commands:
   export PERM_TTS_MAX_CHUNKS_PER_SENTENCE=24
   export PERM_TTS_SAVE_DEBUG_AUDIO=1
   export PERM_TTS_WORKER_COUNT=1
+  export SILERO_VAD_DIR=/workspace/face_recognition/silero-vad
   export VOICE_PORT=8002
   bash run_two_machine_voice.sh
 

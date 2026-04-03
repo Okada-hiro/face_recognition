@@ -54,6 +54,7 @@ TITLE = "Recognition Browser"
 LIVE_PERSON_MODEL = os.getenv("RECOGNITION_LIVE_PERSON_MODEL", "yolo11n.pt")
 LIVE_DEVICE = os.getenv("RECOGNITION_LIVE_DEVICE", "auto")
 LIVE_DATABASE_DIR = Path(os.getenv("RECOGNITION_LIVE_DATABASE_DIR", ROOT_DIR.parent / "data_base")).resolve()
+LIVE_DATABASE_REGISTRY = LIVE_DATABASE_DIR / "_registry.json"
 LIVE_JPEG_QUALITY = int(os.getenv("RECOGNITION_LIVE_JPEG_QUALITY", "85"))
 YOLO_CONFIG_DIR = Path(os.getenv("YOLO_CONFIG_DIR", str((ROOT_DIR.parent / ".cache" / "Ultralytics").resolve()))).resolve()
 VOICE_TALK_DIR = (ROOT_DIR.parent / "lab_voice_talk").resolve()
@@ -71,7 +72,7 @@ app.add_middleware(
     allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["x-frame-index", "x-track-events", "x-person-count", "x-face-count", "x-match-count", "x-primary-person-id", "x-primary-person-cx", "x-primary-person-cy"],
+    expose_headers=["x-frame-index", "x-track-events", "x-person-count", "x-face-count", "x-match-count", "x-primary-person-id", "x-primary-person-reading", "x-primary-person-cx", "x-primary-person-cy"],
 )
 _live_monitor_lock = threading.Lock()
 _live_monitor: ReceptionMonitor | None = None
@@ -89,6 +90,11 @@ REGISTRATION_CANDIDATE_TTL_SEC = float(os.getenv("RECOGNITION_REGISTRATION_CANDI
 
 class FaceRegistrationPayload(BaseModel):
     person_id: str
+    person_reading: str | None = None
+    person_last_name: str | None = None
+    person_first_name: str | None = None
+    person_last_reading: str | None = None
+    person_first_reading: str | None = None
 
 
 def _resolve_relative_path(relative_path: str) -> Path:
@@ -118,6 +124,94 @@ def _normalize_person_id(raw_value: str) -> str:
     if person_id in {"", ".", ".."}:
         raise HTTPException(status_code=400, detail="person_id is required.")
     return person_id[:64]
+
+
+def _normalize_person_reading(raw_value: str | None) -> str:
+    reading = str(raw_value or "").strip()
+    reading = re.sub(r"\s+", "", reading)
+    return reading[:64]
+
+
+def _normalize_name_component(raw_value: str | None) -> str:
+    value = str(raw_value or "").strip()
+    value = re.sub(r"\s+", " ", value).strip()
+    value = re.sub(r"[\\/]+", "_", value)
+    return value[:32]
+
+
+def _load_face_registry() -> dict[str, dict]:
+    if not LIVE_DATABASE_REGISTRY.is_file():
+        return {}
+    try:
+        return json.loads(LIVE_DATABASE_REGISTRY.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _save_face_registry(registry: dict[str, dict]) -> None:
+    LIVE_DATABASE_DIR.mkdir(parents=True, exist_ok=True)
+    LIVE_DATABASE_REGISTRY.write_text(
+        json.dumps(registry, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+def _get_registry_entry(person_id: str) -> dict | None:
+    registry = _load_face_registry()
+    entry = registry.get(person_id)
+    return entry if isinstance(entry, dict) else None
+
+
+def _get_person_reading(person_id: str) -> str:
+    if not person_id:
+        return ""
+    entry = _get_registry_entry(person_id)
+    if not entry:
+        return ""
+    return str(entry.get("person_reading") or "").strip()
+
+
+def _update_face_registry(
+    person_id: str,
+    image_path: Path,
+    person_reading: str | None = None,
+    *,
+    person_last_name: str | None = None,
+    person_first_name: str | None = None,
+    person_last_reading: str | None = None,
+    person_first_reading: str | None = None,
+) -> None:
+    registry = _load_face_registry()
+    now_iso = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+    entry = registry.get(person_id) or {
+        "person_id": person_id,
+        "person_reading": "",
+        "person_last_name": "",
+        "person_first_name": "",
+        "person_last_reading": "",
+        "person_first_reading": "",
+        "created_at": now_iso,
+        "images": [],
+    }
+    images = [item for item in entry.get("images", []) if isinstance(item, str)]
+    image_rel = image_path.relative_to(LIVE_DATABASE_DIR).as_posix()
+    if image_rel not in images:
+        images.append(image_rel)
+    entry["images"] = images
+    entry["image_count"] = len(images)
+    if person_reading:
+        entry["person_reading"] = person_reading
+    if person_last_name:
+        entry["person_last_name"] = person_last_name
+    if person_first_name:
+        entry["person_first_name"] = person_first_name
+    if person_last_reading:
+        entry["person_last_reading"] = person_last_reading
+    if person_first_reading:
+        entry["person_first_reading"] = person_first_reading
+    entry["updated_at"] = now_iso
+    registry[person_id] = entry
+    _save_face_registry(registry)
 
 
 def _render_entry(path: Path) -> str:
@@ -805,6 +899,11 @@ def _select_primary_person_id(event) -> str:
     return ""
 
 
+def _select_primary_person_reading(event) -> str:
+    person_id = _select_primary_person_id(event)
+    return _get_person_reading(person_id)
+
+
 def _select_primary_person(event):
     match_track_ids = {match.source_track_id for match in event.matches if match.source_track_id is not None}
     for person in event.persons:
@@ -1008,6 +1107,7 @@ async def live_frame(frame: UploadFile = File(...), save_snapshot: str = Form(de
         "x-face-count": str(len(event.faces)),
         "x-person-count": str(len(event.persons)),
         "x-primary-person-id": quote(_select_primary_person_id(event), safe=""),
+        "x-primary-person-reading": quote(_select_primary_person_reading(event), safe=""),
         "x-primary-person-cx": f"{primary_center_x:.4f}",
         "x-primary-person-cy": f"{primary_center_y:.4f}",
         "x-track-events": json.dumps(
@@ -1023,7 +1123,12 @@ async def live_frame(frame: UploadFile = File(...), save_snapshot: str = Form(de
 
 @app.post("/api/register-face")
 async def register_face(payload: FaceRegistrationPayload) -> JSONResponse:
-    person_id = _normalize_person_id(payload.person_id)
+    person_last_name = _normalize_name_component(payload.person_last_name)
+    person_first_name = _normalize_name_component(payload.person_first_name)
+    person_last_reading = _normalize_person_reading(payload.person_last_reading)
+    person_first_reading = _normalize_person_reading(payload.person_first_reading)
+    person_id = _normalize_person_id((person_last_name + person_first_name) or payload.person_id)
+    person_reading = _normalize_person_reading((person_last_reading + person_first_reading) or payload.person_reading)
     crop, frame_index = _pop_registration_candidate()
     target_dir = LIVE_DATABASE_DIR / person_id
     target_dir.mkdir(parents=True, exist_ok=True)
@@ -1032,14 +1137,24 @@ async def register_face(payload: FaceRegistrationPayload) -> JSONResponse:
     ok = cv2.imwrite(str(target_path), crop)
     if not ok:
         raise HTTPException(status_code=500, detail="顔画像の保存に失敗しました。")
+    _update_face_registry(
+        person_id,
+        target_path,
+        person_reading,
+        person_last_name=person_last_name,
+        person_first_name=person_first_name,
+        person_last_reading=person_last_reading,
+        person_first_reading=person_first_reading,
+    )
 
     with _live_monitor_lock:
         monitor = _get_live_monitor()
         monitor.database.build()
 
     logger.info(
-        "[FACE_REGISTER] person_id=%s frame=%d saved=%s",
+        "[FACE_REGISTER] person_id=%s reading=%s frame=%d saved=%s",
         person_id,
+        person_reading,
         frame_index,
         target_path,
     )
@@ -1047,8 +1162,27 @@ async def register_face(payload: FaceRegistrationPayload) -> JSONResponse:
         {
             "ok": True,
             "person_id": person_id,
+            "person_reading": person_reading,
+            "person_last_name": person_last_name,
+            "person_first_name": person_first_name,
+            "person_last_reading": person_last_reading,
+            "person_first_reading": person_first_reading,
             "saved_path": str(target_path),
             "frame_index": frame_index,
+        }
+    )
+
+
+@app.get("/api/face-database")
+async def face_database() -> JSONResponse:
+    registry = _load_face_registry()
+    rows = list(registry.values())
+    rows.sort(key=lambda item: str(item.get("updated_at", "")), reverse=True)
+    return JSONResponse(
+        {
+            "database_dir": str(LIVE_DATABASE_DIR),
+            "registry_path": str(LIVE_DATABASE_REGISTRY),
+            "people": rows,
         }
     )
 

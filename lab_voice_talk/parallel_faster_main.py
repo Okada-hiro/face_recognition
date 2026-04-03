@@ -46,6 +46,9 @@ os.makedirs(PROCESSING_DIR, exist_ok=True)
 TTS_DEBUG_WEB_DIR = os.path.join(PROCESSING_DIR, "tts_debug")
 TTS_DEBUG_VIEWER_HTML = os.path.join(os.path.dirname(__file__), "tts_debug_browser.html")
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+SILERO_VAD_DIR = os.path.abspath(
+    os.getenv("SILERO_VAD_DIR", os.path.join(os.path.dirname(__file__), "..", "silero-vad"))
+)
 logger.info(f"Using Device: {DEVICE}")
 SYNC_ROOT_DIR = os.path.abspath(os.getenv("RUNPOD_SYNC_ROOT", "."))
 SYNC_TOKEN = os.getenv("RUNPOD_SYNC_TOKEN", "").strip()
@@ -58,16 +61,61 @@ app.mount(f"/download", StaticFiles(directory=PROCESSING_DIR), name="download")
 # SpeakerGuard初期化
 speaker_guard = SpeakerGuard()
 NEXT_AUDIO_IS_REGISTRATION = False
+CURRENT_CUSTOMER_PROFILE = {"person_id": "", "person_reading": ""}
+
+
+def set_current_customer_profile(person_id: str | None = None, person_reading: str | None = None):
+    CURRENT_CUSTOMER_PROFILE["person_id"] = (person_id or "").strip()
+    CURRENT_CUSTOMER_PROFILE["person_reading"] = (person_reading or "").strip()
+
+
+def get_current_customer_profile() -> dict:
+    return dict(CURRENT_CUSTOMER_PROFILE)
+
+
+def _build_customer_context_text() -> str:
+    person_id = CURRENT_CUSTOMER_PROFILE.get("person_id", "").strip()
+    person_reading = CURRENT_CUSTOMER_PROFILE.get("person_reading", "").strip()
+    if not person_id:
+        return ""
+    if person_reading:
+        return f"【来訪者情報】現在応対中の相手は {person_id} さんです。読みは {person_reading} です。"
+    return f"【来訪者情報】現在応対中の相手は {person_id} さんです。"
+
+
+def _replace_customer_name_for_tts(text: str) -> str:
+    person_id = CURRENT_CUSTOMER_PROFILE.get("person_id", "").strip()
+    person_reading = CURRENT_CUSTOMER_PROFILE.get("person_reading", "").strip()
+    if not person_id or not person_reading:
+        return text
+    converted = text.replace(person_id, person_reading)
+    compact_person_id = person_id.replace(" ", "")
+    compact_person_reading = person_reading.replace(" ", "")
+    if compact_person_id and compact_person_id != person_id:
+        converted = converted.replace(compact_person_id, compact_person_reading or person_reading)
+    return converted
 
 # --- Silero VAD のロード ---
 logger.info("⏳ Loading Silero VAD model...")
 try:
-    vad_model, utils = torch.hub.load(
-        repo_or_dir='snakers4/silero-vad',
-        model='silero_vad',
-        force_reload=False,
-        onnx=False
-    )
+    if os.path.isdir(SILERO_VAD_DIR):
+        logger.info(f"Loading Silero VAD from local repo: {SILERO_VAD_DIR}")
+        vad_model, utils = torch.hub.load(
+            repo_or_dir=SILERO_VAD_DIR,
+            model='silero_vad',
+            source='local',
+            force_reload=False,
+            onnx=False,
+        )
+    else:
+        logger.warning(f"Local Silero VAD repo not found at {SILERO_VAD_DIR}; falling back to remote torch.hub load.")
+        vad_model, utils = torch.hub.load(
+            repo_or_dir='snakers4/silero-vad',
+            model='silero_vad',
+            trust_repo=True,
+            force_reload=False,
+            onnx=False,
+        )
     (get_speech_timestamps, save_audio, read_audio, VADIterator, collect_chunks) = utils
     vad_model.to(DEVICE)
     logger.info("✅ Silero VAD model loaded.")
@@ -266,7 +314,10 @@ async def process_voice_pipeline(audio_float32_np, websocket: WebSocket, chat_hi
             logger.info("[TASK] 空の認識結果")
             return
 
+        customer_context = _build_customer_context_text()
         text_with_context = f"【{speaker_id}】 {text}"
+        if customer_context:
+            text_with_context = f"{customer_context}\n{text_with_context}"
         logger.info(f"[TASK] {text_with_context}")
 
         await websocket.send_json({
@@ -420,6 +471,7 @@ async def handle_llm_tts(text_for_llm: str, websocket: WebSocket, chat_history: 
                     return
 
                 idx, phrase = item
+                phrase_for_tts = _replace_customer_name_for_tts(phrase)
                 sentence_start = time.perf_counter()
                 queue_wait_ms = (sentence_start - sentence_enqueued_at.get(idx, sentence_start)) * 1000.0
                 logger.info(
@@ -435,7 +487,7 @@ async def handle_llm_tts(text_for_llm: str, websocket: WebSocket, chat_history: 
                         tts_snapshot = {"snapshot_error": True}
                 logger.info(
                     f"[TTS_DIAG] worker={worker_id} sentence={idx} "
-                    f"phrase={phrase_preview!r} phrase_repr={phrase!r} model={tts_snapshot}"
+                    f"phrase={phrase_preview!r} phrase_repr={phrase!r} tts_phrase={phrase_for_tts!r} model={tts_snapshot}"
                 )
                 total_len = 0
                 tts_chunk_count = 0
@@ -502,7 +554,7 @@ async def handle_llm_tts(text_for_llm: str, websocket: WebSocket, chat_history: 
                     return chunk_dbfs_local
 
                 try:
-                    stream_gen = synthesize_speech_to_memory_stream_for_worker(phrase, worker_id)
+                    stream_gen = synthesize_speech_to_memory_stream_for_worker(phrase_for_tts, worker_id)
                     while True:
                         # (E) to_thread / スケジューリング固定費の近似
                         sched_probe_start = time.perf_counter()

@@ -218,6 +218,30 @@ body.app-live .phone-screen {
   min-height: 100%;
 }
 
+body.app-live .status-bar {
+  grid-area: status;
+}
+
+body.app-live .phone-screen-alert {
+  grid-area: alert;
+}
+
+body.app-live .hero {
+  grid-area: hero;
+}
+
+body.app-live .avatar-zone {
+  grid-area: avatar;
+}
+
+body.app-live .feed-card {
+  grid-area: feed;
+}
+
+body.app-live .dialogue-card {
+  grid-area: dialogue;
+}
+
 .status-bar,
 .phone-screen-alert,
 .hero,
@@ -240,6 +264,13 @@ body.app-live .phone-screen {
   position: sticky;
   top: 0;
   z-index: 6;
+  padding: 0;
+  margin-bottom: 0;
+  background: transparent;
+  backdrop-filter: none;
+}
+
+.phone-screen-alert.has-alert {
   padding: 0 4px 10px;
   margin-bottom: 2px;
   background: linear-gradient(180deg, rgba(12, 20, 36, 0.96), rgba(12, 20, 36, 0.72), transparent);
@@ -251,6 +282,10 @@ body.app-live .phone-screen {
   justify-content: space-between;
   gap: 12px;
   align-items: flex-start;
+}
+
+.hero-copy {
+  min-width: 0;
 }
 
 .hero h2 {
@@ -442,6 +477,8 @@ body.app-live .phone-screen {
 
 .feed-card {
   margin-top: 8px;
+  display: grid;
+  gap: 12px;
 }
 
 .feed-head,
@@ -484,6 +521,29 @@ body.app-live .phone-screen {
   overflow: hidden;
 }
 
+.camera-overlay {
+  position: absolute;
+  top: 12px;
+  z-index: 2;
+  border-radius: 999px;
+  padding: 7px 11px;
+  background: rgba(7, 12, 22, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  backdrop-filter: blur(8px);
+  font-size: 0.76rem;
+  line-height: 1;
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.camera-overlay-left {
+  left: 12px;
+}
+
+.camera-overlay-right {
+  right: 12px;
+  color: var(--accent);
+}
+
 .feed-image,
 .camera-video {
   position: absolute;
@@ -503,6 +563,7 @@ body.app-live .phone-screen {
   z-index: 0;
   opacity: 1;
   pointer-events: none;
+  transform: scaleX(-1);
 }
 
 .corner {
@@ -530,12 +591,16 @@ body.app-live .phone-screen {
 }
 
 .target-label {
-  left: 50%;
+  left: 14px;
   bottom: 14px;
-  transform: translateX(-50%);
   color: rgba(255,255,255,0.84);
-  font-size: 0.8rem;
-  z-index: 1;
+  font-size: 0.78rem;
+  z-index: 2;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(7, 12, 22, 0.62);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(8px);
 }
 
 .feed-meta {
@@ -563,11 +628,20 @@ body.app-live .phone-screen {
 }
 
 .registration-card {
-  margin-top: 14px;
-  padding: 14px;
-  border-radius: 18px;
+  position: fixed;
+  inset:
+    calc(env(safe-area-inset-top, 0px) + 12px)
+    calc(env(safe-area-inset-right, 0px) + 12px)
+    calc(env(safe-area-inset-bottom, 0px) + 12px)
+    calc(env(safe-area-inset-left, 0px) + 12px);
+  z-index: 9;
+  padding: 18px;
+  border-radius: 22px;
   border: 1px solid rgba(115, 240, 197, 0.16);
-  background: rgba(115, 240, 197, 0.08);
+  background: linear-gradient(180deg, rgba(9, 15, 29, 0.96), rgba(10, 18, 32, 0.94));
+  backdrop-filter: blur(18px);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.32);
+  overflow: auto;
 }
 
 .registration-head {
@@ -597,6 +671,40 @@ body.app-live .phone-screen {
   margin-top: 12px;
 }
 
+.registration-choice-actions {
+  display: grid;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.registration-choice-button,
+.registration-secondary-button {
+  width: 100%;
+  border-radius: 16px;
+  padding: 14px 16px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--ink);
+  font: inherit;
+}
+
+.registration-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.registration-field {
+  display: grid;
+  gap: 8px;
+}
+
+.registration-label {
+  color: rgba(255, 255, 255, 0.82);
+  font-size: 0.86rem;
+  letter-spacing: 0.02em;
+}
+
 .registration-input {
   width: 100%;
   border: 1px solid rgba(255, 255, 255, 0.14);
@@ -605,6 +713,29 @@ body.app-live .phone-screen {
   color: var(--ink);
   padding: 12px 14px;
   font: inherit;
+}
+
+.registration-input-large {
+  min-height: 64px;
+  padding: 16px 18px;
+  font-size: 1.08rem;
+}
+
+.registration-existing-form {
+  display: grid;
+  gap: 14px;
+  margin-top: 14px;
+}
+
+.registration-field-full {
+  grid-column: 1 / -1;
+}
+
+.registration-actions-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-top: 4px;
 }
 
 .registration-input::placeholder {
@@ -621,6 +752,34 @@ body.app-live .phone-screen {
 
 .registration-status[data-tone="danger"] {
   color: #ffd0d0;
+}
+
+.mini-camera-float {
+  position: fixed;
+  top: calc(env(safe-area-inset-top, 0px) + 12px);
+  right: calc(env(safe-area-inset-right, 0px) + 12px);
+  z-index: 7;
+  width: min(32vw, 156px);
+  aspect-ratio: 3 / 4;
+  border-radius: 18px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(8, 12, 22, 0.82);
+  box-shadow: 0 18px 36px rgba(0, 0, 0, 0.28);
+  backdrop-filter: blur(10px);
+}
+
+.mini-camera-float.is-draggable {
+  touch-action: none;
+  cursor: grab;
+}
+
+.mini-camera-video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #0a1020;
+  transform: scaleX(-1);
 }
 
 .bubble {
@@ -774,6 +933,19 @@ body.app-live .phone-screen {
 
 .phone-screen[data-state="recognized"] .orbit-text {
   color: rgba(255, 203, 119, 0.96);
+}
+
+.phone-screen.is-registration-mode .avatar-zone,
+.phone-screen.is-registration-mode .hero,
+.phone-screen.is-registration-mode .dialogue-card,
+.phone-screen.is-registration-mode .feed-card {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.phone-screen.is-registration-mode .registration-card {
+  visibility: visible;
+  pointer-events: auto;
 }
 
 .phone-screen[data-state="listening"] .halo-outer,
@@ -1038,20 +1210,7 @@ body.app-live .phone-screen {
 }
 
 .live-debug-pill {
-  position: absolute;
-  left: 16px;
-  right: 16px;
-  bottom: max(14px, calc(env(safe-area-inset-bottom, 0px) + 6px));
-  z-index: 5;
-  padding: 8px 10px;
-  border-radius: 999px;
-  background: rgba(5, 11, 20, 0.62);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  color: rgba(255, 255, 255, 0.72);
-  font-size: 0.74rem;
-  letter-spacing: 0.02em;
-  text-align: center;
-  backdrop-filter: blur(8px);
+  display: none;
 }
 
 .capture-canvas {
@@ -1202,4 +1361,202 @@ body.app-live .phone-screen {
   .feed-meta {
     grid-template-columns: 1fr;
   }
+}
+
+@media (orientation: landscape) and (max-height: 720px) {
+  body.app-live .phone-screen {
+    display: grid;
+    grid-template-columns: minmax(240px, 0.92fr) minmax(300px, 1.08fr);
+    grid-template-areas:
+      "status status"
+      "alert alert"
+      "hero feed"
+      "avatar feed"
+      "dialogue dialogue";
+    align-content: start;
+    column-gap: 16px;
+    row-gap: 10px;
+    padding: 10px 12px 18px;
+  }
+
+  body.app-live .status-bar {
+    padding-bottom: 4px;
+  }
+
+  body.app-live .phone-screen-alert {
+    margin-bottom: 0;
+    padding: 0 0 6px;
+  }
+
+  body.app-live .hero {
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  body.app-live .hero h2 {
+    font-size: 1.28rem;
+  }
+
+  body.app-live .state-pill {
+    padding: 8px 11px;
+    font-size: 0.74rem;
+  }
+
+  body.app-live .avatar-zone {
+    min-height: 0;
+    height: min(54vh, 290px);
+    margin: 0;
+    align-self: stretch;
+  }
+
+  body.app-live .halo-outer {
+    width: min(42vh, 228px);
+    height: min(42vh, 228px);
+  }
+
+  body.app-live .halo-middle {
+    width: min(34vh, 182px);
+    height: min(34vh, 182px);
+  }
+
+  body.app-live .halo-inner {
+    width: min(24vh, 128px);
+    height: min(24vh, 128px);
+  }
+
+  body.app-live .phone-screen.demo-eyes .assistant-face {
+    width: min(52vw, 300px);
+    height: min(34vw, 186px);
+    max-width: 300px;
+    max-height: 186px;
+  }
+
+  body.app-live .phone-screen.demo-eyes .eye {
+    top: 10px;
+    width: min(18vw, 120px);
+    height: min(24vw, 150px);
+    max-width: 120px;
+    max-height: 150px;
+  }
+
+  body.app-live .phone-screen.demo-eyes .eye-left {
+    left: 8px;
+  }
+
+  body.app-live .phone-screen.demo-eyes .eye-right {
+    right: 8px;
+  }
+
+  body.app-live .phone-screen.demo-eyes .eye-core {
+    width: min(10vw, 68px);
+    height: min(15vw, 98px);
+    max-width: 68px;
+    max-height: 98px;
+  }
+
+  body.app-live .phone-screen.demo-eyes .eye-shine {
+    width: min(4.6vw, 30px);
+    height: min(6.6vw, 42px);
+    max-width: 30px;
+    max-height: 42px;
+  }
+
+  body.app-live .orbit-text {
+    bottom: 10px;
+    font-size: 0.68rem;
+  }
+
+  body.app-live .feed-card,
+  body.app-live .dialogue-card {
+    margin-top: 0;
+    padding: 12px;
+  }
+
+  body.app-live .feed-card {
+    align-self: start;
+    grid-row: span 2;
+  }
+
+  body.app-live .feed-head,
+  body.app-live .dialogue-head {
+    margin-bottom: 8px;
+    font-size: 0.78rem;
+  }
+
+  body.app-live .feed-copy {
+    margin-bottom: 8px;
+    font-size: 0.76rem;
+  }
+
+  body.app-live .feed-body {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+
+  body.app-live .feed-camera {
+    aspect-ratio: 4 / 3;
+    max-height: none;
+    min-height: 0;
+  }
+
+  body.app-live .feed-meta {
+    display: none;
+  }
+
+  body.app-live .meta-row {
+    padding: 9px 10px;
+    font-size: 0.82rem;
+  }
+
+  body.app-live .target-box {
+    width: min(34%, 150px);
+    height: min(74%, 172px);
+  }
+
+  body.app-live .target-label {
+    bottom: 10px;
+    font-size: 0.74rem;
+  }
+
+  body.app-live .registration-card {
+    inset:
+      calc(env(safe-area-inset-top, 0px) + 8px)
+      calc(env(safe-area-inset-right, 0px) + 8px)
+      calc(env(safe-area-inset-bottom, 0px) + 8px)
+      calc(env(safe-area-inset-left, 0px) + 8px);
+    padding: 14px;
+  }
+
+  body.app-live .registration-copy,
+  body.app-live .registration-status {
+    font-size: 0.76rem;
+  }
+
+  body.app-live .registration-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  body.app-live .registration-button {
+    padding: 12px 14px;
+  }
+
+  body.app-live .bubble {
+    padding: 11px 12px;
+    font-size: 0.86rem;
+  }
+
+  body.app-live .mini-camera-float {
+    width: min(18vw, 136px);
+    top: calc(env(safe-area-inset-top, 0px) + 10px);
+    right: calc(env(safe-area-inset-right, 0px) + 10px);
+  }
+}
+
+body.app-live .eyebrow,
+body.app-live .hero p:last-child,
+body.app-live .state-pill,
+body.app-live .feed-head,
+body.app-live .feed-copy,
+body.app-live .feed-meta {
+  display: none;
 }

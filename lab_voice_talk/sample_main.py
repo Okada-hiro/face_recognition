@@ -240,16 +240,31 @@ def _consume_human_then_ai(state: dict, user_text: str) -> str:
 # SpeakerGuard初期化
 speaker_guard = SpeakerGuard()
 NEXT_AUDIO_IS_REGISTRATION = False
+SILERO_VAD_DIR = os.path.abspath(
+    os.getenv("SILERO_VAD_DIR", os.path.join(os.path.dirname(__file__), "..", "silero-vad"))
+)
 
 # --- Silero VAD のロード ---
 logger.info("⏳ Loading Silero VAD model...")
 try:
-    vad_model, utils = torch.hub.load(
-        repo_or_dir='snakers4/silero-vad',
-        model='silero_vad',
-        force_reload=False,
-        onnx=False
-    )
+    if os.path.isdir(SILERO_VAD_DIR):
+        logger.info(f"Loading Silero VAD from local repo: {SILERO_VAD_DIR}")
+        vad_model, utils = torch.hub.load(
+            repo_or_dir=SILERO_VAD_DIR,
+            model='silero_vad',
+            source='local',
+            force_reload=False,
+            onnx=False,
+        )
+    else:
+        logger.warning(f"Local Silero VAD repo not found at {SILERO_VAD_DIR}; falling back to remote torch.hub load.")
+        vad_model, utils = torch.hub.load(
+            repo_or_dir='snakers4/silero-vad',
+            model='silero_vad',
+            trust_repo=True,
+            force_reload=False,
+            onnx=False,
+        )
     (get_speech_timestamps, save_audio, read_audio, VADIterator, collect_chunks) = utils
     vad_model.to(DEVICE)
     logger.info("✅ Silero VAD model loaded.")

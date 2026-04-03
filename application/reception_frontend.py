@@ -6,11 +6,13 @@ import logging
 import os
 import time
 from pathlib import Path
+from urllib import request as urllib_request
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -32,6 +34,15 @@ app = FastAPI(title="Reception Frontend", version="1.0.0")
 app.mount("/app-assets", StaticFiles(directory=str(SCREEN_ROOT)), name="app-assets")
 ASSET_VERSION = str(int(time.time()))
 logger = logging.getLogger("reception_frontend")
+
+
+class FaceRegistrationPayload(BaseModel):
+    person_id: str
+    person_reading: str | None = None
+    person_last_name: str | None = None
+    person_first_name: str | None = None
+    person_last_reading: str | None = None
+    person_first_reading: str | None = None
 
 
 def _html_response(html_text: str) -> HTMLResponse:
@@ -67,8 +78,18 @@ def _derive_proxy_base(host: str, scheme: str, current_port: int, target_port: i
     return f"{scheme}://{host}"
 
 
+def _resolve_vision_http_base(request_obj: Request | None = None) -> str:
+    if VISION_PUBLIC_BASE:
+        return VISION_PUBLIC_BASE.rstrip("/")
+    if request_obj is not None:
+        host = request_obj.headers.get("host", request_obj.url.netloc)
+        scheme = request_obj.url.scheme or "https"
+        return _derive_proxy_base(host, scheme, FRONTEND_PORT, VISION_PORT).rstrip("/")
+    return f"http://127.0.0.1:{VISION_PORT}"
+
+
 def _runtime_config(request: Request) -> dict[str, str]:
-    vision_http_base = VISION_PUBLIC_BASE or ""
+    vision_http_base = _resolve_vision_http_base(request)
     if BROWSER_VOICE_WS_URL:
         voice_ws_url = BROWSER_VOICE_WS_URL
     else:
@@ -127,6 +148,37 @@ async def manual_page() -> HTMLResponse:
 @app.get("/app/manual", response_class=HTMLResponse)
 async def app_manual_page() -> HTMLResponse:
     return await manual_page()
+
+
+@app.post("/api/register-face")
+async def register_face_proxy(payload: FaceRegistrationPayload, request: Request) -> JSONResponse:
+    upstream_url = _resolve_vision_http_base(request).rstrip("/") + "/api/register-face"
+    upstream_request = urllib_request.Request(
+        upstream_url,
+        data=json.dumps(payload.model_dump()).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib_request.urlopen(upstream_request, timeout=15) as response:
+            body = response.read().decode("utf-8")
+            return JSONResponse(json.loads(body))
+    except Exception as exc:
+        logger.warning("[FRONTEND] register-face proxy failed upstream=%s err=%s", upstream_url, exc)
+        raise HTTPException(status_code=502, detail=f"register_face_proxy_failed: {exc}") from exc
+
+
+@app.get("/api/face-database")
+async def face_database_proxy(request: Request) -> JSONResponse:
+    upstream_url = _resolve_vision_http_base(request).rstrip("/") + "/api/face-database"
+    upstream_request = urllib_request.Request(upstream_url, method="GET")
+    try:
+        with urllib_request.urlopen(upstream_request, timeout=15) as response:
+            body = response.read().decode("utf-8")
+            return JSONResponse(json.loads(body))
+    except Exception as exc:
+        logger.warning("[FRONTEND] face-database proxy failed upstream=%s err=%s", upstream_url, exc)
+        raise HTTPException(status_code=502, detail=f"face_database_proxy_failed: {exc}") from exc
 
 
 @app.websocket("/voice-ws")

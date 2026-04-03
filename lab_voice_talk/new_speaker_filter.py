@@ -52,6 +52,8 @@ class SpeakerGuard:
         
         self.known_speakers = [] 
         self.auto_register_min_seconds = float(os.getenv("SPEAKER_AUTO_REGISTER_MIN_SECONDS", "1.5"))
+        self.bootstrap_max_seconds = float(os.getenv("SPEAKER_BOOTSTRAP_MAX_SECONDS", "8.0"))
+        self.bootstrap_audio_tensor = None
         
         # ★閾値を変更★
         # 0.35(厳格) -> 0.25(実用的)
@@ -60,6 +62,37 @@ class SpeakerGuard:
         self.threshold = 0.25 
         
         print(f"✅ [SpeakerGuard] 準備完了 (Device: {self.device}, Threshold: {self.threshold})")
+
+    def _prepare_audio_tensor(self, audio_tensor):
+        if not isinstance(audio_tensor, torch.Tensor):
+            audio_tensor = torch.as_tensor(audio_tensor)
+        audio_tensor = audio_tensor.detach().float().cpu()
+        if audio_tensor.ndim == 1:
+            audio_tensor = audio_tensor.unsqueeze(0)
+        elif audio_tensor.ndim > 2:
+            audio_tensor = audio_tensor.reshape(audio_tensor.shape[0], -1)
+        if audio_tensor.shape[0] > 1:
+            audio_tensor = audio_tensor.mean(dim=0, keepdim=True)
+        max_val = torch.abs(audio_tensor).max()
+        if max_val > 0:
+            audio_tensor = audio_tensor / max_val
+        return audio_tensor.contiguous()
+
+    def _append_bootstrap_audio(self, audio_tensor) -> float:
+        if self.bootstrap_audio_tensor is None:
+            self.bootstrap_audio_tensor = audio_tensor
+        else:
+            self.bootstrap_audio_tensor = torch.cat([self.bootstrap_audio_tensor, audio_tensor], dim=-1)
+
+        max_samples = max(16000, int(self.bootstrap_max_seconds * 16000))
+        if self.bootstrap_audio_tensor.shape[-1] > max_samples:
+            self.bootstrap_audio_tensor = self.bootstrap_audio_tensor[:, -max_samples:]
+        return self.bootstrap_audio_tensor.shape[-1] / 16000.0
+
+    def _consume_bootstrap_audio(self):
+        audio_tensor = self.bootstrap_audio_tensor
+        self.bootstrap_audio_tensor = None
+        return audio_tensor
 
     def extract_embedding(self, audio_tensor):
         """音声波形から特徴ベクトル(Embedding)を抽出"""
@@ -88,20 +121,31 @@ class SpeakerGuard:
         Tensorを受け取り、(登録済みか, 話者ID) を返す
         """
         try:
-            current_embedding = self.extract_embedding(audio_tensor)
-            sample_count = int(audio_tensor.shape[-1]) if audio_tensor.ndim > 1 else int(audio_tensor.shape[0])
+            prepared_audio = self._prepare_audio_tensor(audio_tensor)
+            sample_count = int(prepared_audio.shape[-1])
             duration_sec = sample_count / 16000.0
             
             # まだ誰も登録されていない場合 -> 最初の1人を自動登録 (オーナー)
             if not self.known_speakers:
-                if duration_sec < self.auto_register_min_seconds:
+                accumulated_sec = self._append_bootstrap_audio(prepared_audio)
+                if accumulated_sec < self.auto_register_min_seconds:
                     logger.info(
-                        f"🚫 [SpeakerGuard] 初回自動登録を見送り: 音声が短すぎます ({duration_sec:.2f}s < {self.auto_register_min_seconds:.2f}s)"
+                        "⌛ [SpeakerGuard] 初回話者の音声を蓄積中: "
+                        f"chunk={duration_sec:.2f}s total={accumulated_sec:.2f}s "
+                        f"target={self.auto_register_min_seconds:.2f}s"
                     )
-                    return False, "Unknown"
+                    return True, "User 0"
+                bootstrap_audio = self._consume_bootstrap_audio()
+                current_embedding = self.extract_embedding(bootstrap_audio)
                 print("🔒 [SpeakerGuard] 最初の話者を 'User 0' (オーナー) として登録")
+                logger.info(
+                    "✅ [SpeakerGuard] 初回話者の自動登録を完了: total=%.2fs",
+                    accumulated_sec,
+                )
                 self.known_speakers.append({'id': 'User 0', 'emb': current_embedding})
                 return True, "User 0"
+
+            current_embedding = self.extract_embedding(prepared_audio)
 
             max_score = -1.0
             best_match_id = "Unknown"

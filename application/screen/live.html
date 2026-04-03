@@ -17,7 +17,7 @@
             <span id="net-pill">接続待ち</span>
           </div>
 
-          <div class="phone-screen-alert">
+          <div class="phone-screen-alert" id="phone-screen-alert">
             <div class="dialogue-note" id="dialogue-note" hidden>短い会話や話者不一致はここに表示されます。</div>
           </div>
 
@@ -61,6 +61,8 @@
             <p class="feed-copy">この枠には、端末の前面カメラ映像をそのまま表示しています。</p>
             <div class="feed-body">
               <div class="feed-camera">
+                <div class="camera-overlay camera-overlay-left">カメラ映像</div>
+                <div class="camera-overlay camera-overlay-right" id="feed-badge-overlay">接続中</div>
                 <img id="feed-image" class="feed-image" alt="annotated recognition frame">
                 <video id="camera-video" class="camera-video" autoplay playsinline muted></video>
                 <div class="corner tl"></div>
@@ -85,27 +87,6 @@
                 </div>
               </div>
             </div>
-            <div class="registration-card" id="registration-card" hidden>
-              <div class="registration-head">
-                <span>はじめての方の登録</span>
-                <span class="registration-badge">顔データ</span>
-              </div>
-              <p class="registration-copy" id="registration-copy">お名前を入力すると、いま見えている顔をデータベースへ追加します。</p>
-              <form class="registration-form" id="registration-form">
-                <input
-                  class="registration-input"
-                  id="registration-name"
-                  name="person_id"
-                  type="text"
-                  inputmode="text"
-                  autocomplete="name"
-                  placeholder="お名前"
-                  maxlength="64"
-                >
-                <button class="live-primary-button registration-button" id="registration-submit" type="submit">この名前で登録</button>
-              </form>
-              <p class="registration-status" id="registration-status"></p>
-            </div>
           </section>
 
           <section class="dialogue-card">
@@ -116,6 +97,107 @@
             <div class="bubble bubble-user" id="bubble-user">……</div>
             <div class="bubble bubble-ai" id="bubble-ai">受付アプリを起動しています。</div>
           </section>
+
+          <section class="registration-card" id="registration-card" data-mode="choice" hidden>
+            <div class="registration-head">
+              <span id="registration-title">お名前の確認</span>
+              <span class="registration-badge">顔データ</span>
+            </div>
+            <p class="registration-copy" id="registration-copy">はじめての方ですか？</p>
+
+            <div class="registration-choice-actions" id="registration-choice-actions">
+              <button class="live-primary-button registration-choice-button" id="registration-choice-yes" type="button">はい</button>
+              <button class="registration-choice-button" id="registration-choice-existing" type="button">すでに登録済み</button>
+              <button class="registration-choice-button" id="registration-choice-no" type="button">いいえ</button>
+            </div>
+
+            <form class="registration-existing-form" id="registration-existing-form" hidden>
+              <label class="registration-field registration-field-full">
+                <span class="registration-label">お名前（漢字）</span>
+                <input
+                  class="registration-input registration-input-large"
+                  id="registration-existing-name"
+                  name="existing_person_id"
+                  type="text"
+                  inputmode="text"
+                  autocomplete="name"
+                  placeholder="岡田寛章"
+                  maxlength="64"
+                >
+              </label>
+              <div class="registration-actions-row">
+                <button class="live-primary-button registration-button" id="registration-existing-submit" type="submit">この名前で続ける</button>
+                <button class="registration-secondary-button" id="registration-back-from-existing" type="button">戻る</button>
+              </div>
+            </form>
+
+            <form class="registration-form" id="registration-form" hidden>
+              <div class="registration-grid">
+                <label class="registration-field">
+                  <span class="registration-label">名字</span>
+                  <input
+                    class="registration-input registration-input-large"
+                    id="registration-last-name"
+                    name="person_last_name"
+                    type="text"
+                    inputmode="text"
+                    autocomplete="family-name"
+                    placeholder="岡田"
+                    maxlength="32"
+                  >
+                </label>
+                <label class="registration-field">
+                  <span class="registration-label">名前</span>
+                  <input
+                    class="registration-input registration-input-large"
+                    id="registration-first-name"
+                    name="person_first_name"
+                    type="text"
+                    inputmode="text"
+                    autocomplete="given-name"
+                    placeholder="寛章"
+                    maxlength="32"
+                  >
+                </label>
+                <label class="registration-field">
+                  <span class="registration-label">名字のふりがな</span>
+                  <input
+                    class="registration-input registration-input-large"
+                    id="registration-last-reading"
+                    name="person_last_reading"
+                    type="text"
+                    inputmode="kana"
+                    autocomplete="off"
+                    placeholder="おかだ"
+                    maxlength="32"
+                  >
+                </label>
+                <label class="registration-field">
+                  <span class="registration-label">名前のふりがな</span>
+                  <input
+                    class="registration-input registration-input-large"
+                    id="registration-first-reading"
+                    name="person_first_reading"
+                    type="text"
+                    inputmode="kana"
+                    autocomplete="off"
+                    placeholder="ひろあき"
+                    maxlength="32"
+                  >
+                </label>
+              </div>
+              <div class="registration-actions-row">
+                <button class="live-primary-button registration-button" id="registration-submit" type="submit">この名前で登録</button>
+                <button class="registration-secondary-button" id="registration-back-from-new" type="button">戻る</button>
+              </div>
+            </form>
+
+            <p class="registration-status" id="registration-status"></p>
+          </section>
+
+          <div class="mini-camera-float" id="mini-camera-float" hidden>
+            <video id="mini-camera-video" class="mini-camera-video" autoplay playsinline muted></video>
+          </div>
 
           <div class="app-boot" id="app-boot">
             <div class="app-boot-card">

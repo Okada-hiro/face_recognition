@@ -11,8 +11,12 @@ import logging
 import sys
 import os
 import io
+import json
 import re
 import time
+from datetime import datetime
+from pathlib import Path
+import uuid
 import wave
 
 # --- ロギング設定 ---
@@ -26,7 +30,7 @@ logger = logging.getLogger(__name__)
 # --- 必要なモジュールのインポート ---
 try:
     from transcribe_func import GLOBAL_ASR_MODEL_INSTANCE
-    from new_answer_generator import generate_answer_stream
+    from new_answer_generator import generate_answer_stream, generate_answer_from_audio
     import parallel_faster_text_to_speech as tts_module
     from parallel_faster_text_to_speech import (
         synthesize_speech,
@@ -45,6 +49,9 @@ PROCESSING_DIR = "incoming_audio"
 os.makedirs(PROCESSING_DIR, exist_ok=True)
 TTS_DEBUG_WEB_DIR = os.path.join(PROCESSING_DIR, "tts_debug")
 TTS_DEBUG_VIEWER_HTML = os.path.join(os.path.dirname(__file__), "tts_debug_browser.html")
+REPO_ROOT = Path(__file__).resolve().parents[1]
+HISTORY_DIR = Path(os.getenv("RECOGNITION_HISTORY_DIR", str(REPO_ROOT / "history")))
+HISTORY_DIR.mkdir(parents=True, exist_ok=True)
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 SILERO_VAD_DIR = os.path.abspath(
     os.getenv("SILERO_VAD_DIR", os.path.join(os.path.dirname(__file__), "..", "silero-vad"))
@@ -57,6 +64,90 @@ logger.info(f"[SYNC] root={SYNC_ROOT_DIR}")
 
 app = FastAPI()
 app.mount(f"/download", StaticFiles(directory=PROCESSING_DIR), name="download")
+VOICE_UNDERSTANDING_MODE = os.getenv("RECOGNITION_VOICE_UNDERSTANDING_MODE", "whisper").strip().lower()
+VOICE_UNDERSTANDING_MODEL = os.getenv("RECOGNITION_GEMINI_AUDIO_MODEL", "gemini-3.1-flash-lite-preview").strip()
+ENABLE_SPEAKER_GUARD = os.getenv("RECOGNITION_ENABLE_SPEAKER_GUARD", "1") == "1"
+logger.info(
+    "[VOICE_UNDERSTANDING] mode=%s model=%s",
+    VOICE_UNDERSTANDING_MODE,
+    VOICE_UNDERSTANDING_MODEL,
+)
+logger.info("[SPEAKER_GUARD] enabled=%s", ENABLE_SPEAKER_GUARD)
+
+
+def create_session_state() -> dict:
+    created_at = datetime.now().astimezone()
+    session_id = created_at.strftime("%Y%m%d_%H%M%S") + "_" + uuid.uuid4().hex[:8]
+    history_path = HISTORY_DIR / f"{session_id}.json"
+    state = {
+        "session_id": session_id,
+        "created_at": created_at.isoformat(),
+        "updated_at": created_at.isoformat(),
+        "history_path": str(history_path),
+        "chat_history": [],
+        "current_turn_id": None,
+    }
+    _persist_history_state(state)
+    return state
+
+
+def _extract_chat_history(session_state):
+    if isinstance(session_state, dict):
+        chat_history = session_state.get("chat_history")
+        if isinstance(chat_history, list):
+            return chat_history
+    if isinstance(session_state, list):
+        return session_state
+    return []
+
+
+def _persist_history_state(session_state) -> None:
+    if not isinstance(session_state, dict):
+        return
+    history_path = session_state.get("history_path")
+    if not history_path:
+        return
+    payload = {
+        "session_id": session_state.get("session_id"),
+        "created_at": session_state.get("created_at"),
+        "updated_at": session_state.get("updated_at"),
+        "turns": [],
+    }
+    for item in _extract_chat_history(session_state):
+        role = str(item.get("role", "")).strip()
+        parts = item.get("parts") or []
+        text = "".join(str(part) for part in parts if part is not None).strip()
+        if not text:
+            continue
+        payload["turns"].append({"role": role, "text": text})
+    Path(history_path).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _append_history_turn(session_state, role: str, text: str) -> None:
+    clean = str(text or "").strip()
+    if not clean:
+        return
+    chat_history = _extract_chat_history(session_state)
+    chat_history.append({"role": role, "parts": [clean]})
+    if isinstance(session_state, dict):
+        session_state["updated_at"] = datetime.now().astimezone().isoformat()
+        _persist_history_state(session_state)
+
+
+def get_session_current_turn_id(session_state) -> int | None:
+    if isinstance(session_state, dict):
+        turn_id = session_state.get("current_turn_id")
+        if isinstance(turn_id, int):
+            return turn_id
+    return None
+
+
+def set_session_current_turn_id(session_state, turn_id: int | None) -> None:
+    if not isinstance(session_state, dict):
+        return
+    session_state["current_turn_id"] = turn_id
+    session_state["updated_at"] = datetime.now().astimezone().isoformat()
+    _persist_history_state(session_state)
 
 # SpeakerGuard初期化
 speaker_guard = SpeakerGuard()
@@ -206,6 +297,7 @@ async def process_voice_pipeline(audio_float32_np, websocket: WebSocket, chat_hi
     global NEXT_AUDIO_IS_REGISTRATION
     pipeline_start = time.perf_counter()
     duration_sec = len(audio_float32_np) / 16000.0
+    chat_history_ref = _extract_chat_history(chat_history)
 
     # --- ★追加: 自分の声を保存して確認できるようにする ---
     import soundfile as sf
@@ -227,7 +319,10 @@ async def process_voice_pipeline(audio_float32_np, websocket: WebSocket, chat_hi
     # ---------------------------
     # 1. 話者判定 / 登録ロジック
     # ---------------------------
-    if NEXT_AUDIO_IS_REGISTRATION:
+    if not ENABLE_SPEAKER_GUARD:
+        speaker_id = "User 0"
+        is_allowed = True
+    elif NEXT_AUDIO_IS_REGISTRATION:
         registration_start = time.perf_counter()
         temp_reg_path = f"{PROCESSING_DIR}/reg_{id(audio_float32_np)}.wav"
         import soundfile as sf
@@ -273,7 +368,14 @@ async def process_voice_pipeline(audio_float32_np, websocket: WebSocket, chat_hi
         # 警告を出さずに「無視」する。
         if duration_sec < 2.5:
             logger.info(f"[Ignored] Short audio ({duration_sec:.2f}s) failed auth. Treating as noise.")
-            await websocket.send_json({"status": "ignored", "message": "会話が短すぎます。"})
+            await websocket.send_json(
+                {
+                    "status": "system_alert",
+                    "message": "会話に関係ない内容と判断しました。",
+                    "alert_type": "irrelevant",
+                    "reason": "short_unverified_audio",
+                }
+            )
             return
 
         logger.info("[Access Denied] 登録されていない話者です。")
@@ -285,52 +387,100 @@ async def process_voice_pipeline(audio_float32_np, websocket: WebSocket, chat_hi
         return
 
     # ---------------------------
-    # 3. Whisper 文字起こし
+    # 3. 音声理解
     # ---------------------------
     try:
-        if GLOBAL_ASR_MODEL_INSTANCE is None:
-            raise ValueError("Whisper Model not loaded")
-
-        logger.info("[TASK] 文字起こし開始")
-        transcribe_start = time.perf_counter()
-        segments = await asyncio.to_thread(
-            GLOBAL_ASR_MODEL_INSTANCE.transcribe, 
-            audio_float32_np
-        )
-        transcribe_ms = (time.perf_counter() - transcribe_start) * 1000.0
-        
-        ts_words_start = time.perf_counter()
-        text = "".join([s[2] for s in GLOBAL_ASR_MODEL_INSTANCE.ts_words(segments)])
-        ts_words_ms = (time.perf_counter() - ts_words_start) * 1000.0
-        logger.info(
-            "[PIPELINE_TIMING] stage=asr_done duration_s=%.2f transcribe_ms=%.1f ts_words_ms=%.1f text_len=%d",
-            duration_sec,
-            transcribe_ms,
-            ts_words_ms,
-            len(text.strip()),
-        )
-        
-        if not text.strip():
-            logger.info("[TASK] 空の認識結果")
-            return
-
         customer_context = _build_customer_context_text()
-        text_with_context = f"【{speaker_id}】 {text}"
-        if customer_context:
-            text_with_context = f"{customer_context}\n{text_with_context}"
-        logger.info(f"[TASK] {text_with_context}")
 
-        await websocket.send_json({
-            "status": "transcribed",
-            "question_text": text,
-            "speaker_id": speaker_id 
-        })
+        if VOICE_UNDERSTANDING_MODE == "gemini_audio":
+            logger.info("[TASK] Gemini音声理解開始")
+            gemini_audio_start = time.perf_counter()
+            multimodal_result = await asyncio.to_thread(
+                generate_answer_from_audio,
+                audio_float32_np,
+                chat_history_ref,
+                VOICE_UNDERSTANDING_MODEL,
+            )
+            gemini_audio_ms = (time.perf_counter() - gemini_audio_start) * 1000.0
+            text = str(multimodal_result.get("transcript") or "").strip()
+            answer_text = str(multimodal_result.get("answer") or "").strip()
+            logger.info(
+                "[PIPELINE_TIMING] stage=gemini_audio_done duration_s=%.2f total_ms=%.1f text_len=%d answer_len=%d model=%s",
+                duration_sec,
+                gemini_audio_ms,
+                len(text),
+                len(answer_text),
+                VOICE_UNDERSTANDING_MODEL,
+            )
+            if not text:
+                logger.info("[TASK] Gemini音声理解の認識結果が空でした")
+                return
+            if not answer_text:
+                logger.info("[TASK] Gemini音声理解の回答が空でした")
+                return
 
-        # ---------------------------
-        # 4. LLM & TTS ストリーミング
-        # ---------------------------
-        llm_tts_start = time.perf_counter()
-        await handle_llm_tts(text_with_context, websocket, chat_history)
+            text_with_context = f"【{speaker_id}】 {text}"
+            if customer_context:
+                text_with_context = f"{customer_context}\n{text_with_context}"
+            logger.info(f"[TASK] {text_with_context}")
+
+            await websocket.send_json({
+                "status": "transcribed",
+                "question_text": text,
+                "speaker_id": speaker_id,
+            })
+
+            llm_tts_start = time.perf_counter()
+            await handle_llm_tts(
+                text_with_context,
+                websocket,
+                chat_history,
+                answer_iterator=iter([answer_text]),
+            )
+        else:
+            if GLOBAL_ASR_MODEL_INSTANCE is None:
+                raise ValueError("Whisper Model not loaded")
+
+            logger.info("[TASK] 文字起こし開始")
+            transcribe_start = time.perf_counter()
+            segments = await asyncio.to_thread(
+                GLOBAL_ASR_MODEL_INSTANCE.transcribe, 
+                audio_float32_np
+            )
+            transcribe_ms = (time.perf_counter() - transcribe_start) * 1000.0
+            
+            ts_words_start = time.perf_counter()
+            text = "".join([s[2] for s in GLOBAL_ASR_MODEL_INSTANCE.ts_words(segments)])
+            ts_words_ms = (time.perf_counter() - ts_words_start) * 1000.0
+            logger.info(
+                "[PIPELINE_TIMING] stage=asr_done duration_s=%.2f transcribe_ms=%.1f ts_words_ms=%.1f text_len=%d mode=%s",
+                duration_sec,
+                transcribe_ms,
+                ts_words_ms,
+                len(text.strip()),
+                VOICE_UNDERSTANDING_MODE,
+            )
+            
+            if not text.strip():
+                logger.info("[TASK] 空の認識結果")
+                return
+
+            text_with_context = f"【{speaker_id}】 {text}"
+            if customer_context:
+                text_with_context = f"{customer_context}\n{text_with_context}"
+            logger.info(f"[TASK] {text_with_context}")
+
+            await websocket.send_json({
+                "status": "transcribed",
+                "question_text": text,
+                "speaker_id": speaker_id 
+            })
+
+            # ---------------------------
+            # 4. LLM & TTS ストリーミング
+            # ---------------------------
+            llm_tts_start = time.perf_counter()
+            await handle_llm_tts(text_with_context, websocket, chat_history)
         logger.info(
             "[PIPELINE_TIMING] stage=llm_tts_done duration_s=%.2f total_ms=%.1f",
             duration_sec,
@@ -348,7 +498,8 @@ async def process_voice_pipeline(audio_float32_np, websocket: WebSocket, chat_hi
 
 
 # --- ヘルパー: 回答生成と音声合成 ---
-async def handle_llm_tts(text_for_llm: str, websocket: WebSocket, chat_history: list):
+async def handle_llm_tts(text_for_llm: str, websocket: WebSocket, chat_history: list, answer_iterator=None):
+    chat_history_ref = _extract_chat_history(chat_history)
     text_buffer = ""
     sentence_count = 0
     full_answer = ""
@@ -387,6 +538,7 @@ async def handle_llm_tts(text_for_llm: str, websocket: WebSocket, chat_history: 
     SAVE_DEBUG_AUDIO = os.getenv("PERM_TTS_SAVE_DEBUG_AUDIO", "0") == "1"
     SAVE_DEBUG_AUDIO_DIR = os.getenv("PERM_TTS_SAVE_DEBUG_AUDIO_DIR", os.path.join(PROCESSING_DIR, "tts_debug"))
     turn_id = int(time.time() * 1000)
+    set_session_current_turn_id(chat_history, turn_id)
     stream_cfg = getattr(tts_module, "DEFAULT_STREAM_PARAMS", {})
     if isinstance(stream_cfg, dict):
         stream_cfg["emit_every_frames"] = STREAM_EMIT_EVERY_FRAMES
@@ -419,10 +571,10 @@ async def handle_llm_tts(text_for_llm: str, websocket: WebSocket, chat_history: 
     )
     logger.info(
         f"[LLM_TTS_FLOW] start text_for_llm_len={len(text_for_llm)} "
-        f"history_len={len(chat_history)} split_mode={split_mode} split_pattern={split_pattern}"
+        f"history_len={len(chat_history_ref)} split_mode={split_mode} split_pattern={split_pattern}"
     )
 
-    iterator = generate_answer_stream(text_for_llm, history=chat_history)
+    iterator = answer_iterator if answer_iterator is not None else generate_answer_stream(text_for_llm, history=chat_history_ref)
 
     # 16kHz / PCM16 / mono を維持しつつ、20ms単位で細かく送る
     SAMPLE_RATE = 16000
@@ -783,6 +935,7 @@ async def handle_llm_tts(text_for_llm: str, websocket: WebSocket, chat_history: 
                     await websocket.send_json(
                         {
                             "status": "audio_chunk_meta",
+                            "turn_id": turn_id,
                             "sentence_id": idx,
                             "chunk_id": tts_chunk_idx,
                             "global_chunk_id": global_chunk_id,
@@ -808,6 +961,7 @@ async def handle_llm_tts(text_for_llm: str, websocket: WebSocket, chat_history: 
                     await websocket.send_json(
                         {
                             "status": "audio_sentence_done",
+                            "turn_id": turn_id,
                             "sentence_id": item["sentence_idx"],
                             "last_chunk_id": item.get("tts_chunk_idx", 0),
                             "total_bytes": item.get("total_bytes", 0),
@@ -853,7 +1007,7 @@ async def handle_llm_tts(text_for_llm: str, websocket: WebSocket, chat_history: 
                 for sent in sentences[:-1]:
                     if sent.strip():
                         sentence_count += 1
-                        await websocket.send_json({"status": "reply_chunk", "text_chunk": sent})
+                        await websocket.send_json({"status": "reply_chunk", "turn_id": turn_id, "text_chunk": sent})
                         sentence_enqueued_at[sentence_count] = time.perf_counter()
                         await text_queue.put((sentence_count, sent))
                         logger.info(
@@ -864,7 +1018,7 @@ async def handle_llm_tts(text_for_llm: str, websocket: WebSocket, chat_history: 
         
         if text_buffer.strip():
             sentence_count += 1
-            await websocket.send_json({"status": "reply_chunk", "text_chunk": text_buffer})
+            await websocket.send_json({"status": "reply_chunk", "turn_id": turn_id, "text_chunk": text_buffer})
             sentence_enqueued_at[sentence_count] = time.perf_counter()
             await text_queue.put((sentence_count, text_buffer))
             logger.info(
@@ -889,10 +1043,11 @@ async def handle_llm_tts(text_for_llm: str, websocket: WebSocket, chat_history: 
         await sender_task
         logger.info("[SYNC] audio_sender joined")
 
-        chat_history.append({"role": "user", "parts": [text_for_llm]})
-        chat_history.append({"role": "model", "parts": [full_answer]})
+        _append_history_turn(chat_history, "user", text_for_llm)
+        _append_history_turn(chat_history, "model", full_answer)
         
-        await websocket.send_json({"status": "complete", "answer_text": full_answer})
+        await websocket.send_json({"status": "complete", "turn_id": turn_id, "answer_text": full_answer})
+        set_session_current_turn_id(chat_history, None)
         logger.info(
             f"[LLM_TTS_FLOW] complete answer_len={len(full_answer)} "
             f"total_llm_tts_ms={(time.perf_counter() - llm_tts_start)*1000.0:.1f}"
@@ -901,6 +1056,8 @@ async def handle_llm_tts(text_for_llm: str, websocket: WebSocket, chat_history: 
     except Exception as e:
         logger.error(f"LLM/TTS Error: {e}")
     finally:
+        if get_session_current_turn_id(chat_history) == turn_id:
+            set_session_current_turn_id(chat_history, None)
         for task in tts_tasks:
             if not task.done():
                 task.cancel()
@@ -932,7 +1089,12 @@ async def websocket_endpoint(websocket: WebSocket):
     SAMPLE_RATE = 16000
     CHECK_SPEAKER_SAMPLES = 30000
     
-    chat_history = []
+    chat_history = create_session_state()
+    logger.info(
+        "[HISTORY] session_started session_id=%s path=%s",
+        chat_history.get("session_id"),
+        chat_history.get("history_path"),
+    )
 
     try:
         while True:
@@ -964,7 +1126,13 @@ async def websocket_endpoint(websocket: WebSocket):
                             
                             if len(full_audio) / SAMPLE_RATE < 0.2:
                                 logger.info("Noise detected")
-                                await websocket.send_json({"status": "ignored", "message": "..."})
+                                await websocket.send_json(
+                                    {
+                                        "status": "ignored",
+                                        "message": "音声が短すぎます。",
+                                        "reason": "noise_short",
+                                    }
+                                )
                             else:
                                 await websocket.send_json({"status": "processing", "message": "🧠 AI思考中..."})
                                 await process_voice_pipeline(full_audio, websocket, chat_history)
@@ -974,7 +1142,12 @@ async def websocket_endpoint(websocket: WebSocket):
                         audio_buffer.append(window_np)
                         
                         current_len = sum(len(c) for c in audio_buffer)
-                        if not interruption_triggered and not NEXT_AUDIO_IS_REGISTRATION and current_len > CHECK_SPEAKER_SAMPLES:
+                        if (
+                            ENABLE_SPEAKER_GUARD
+                            and not interruption_triggered
+                            and not NEXT_AUDIO_IS_REGISTRATION
+                            and current_len > CHECK_SPEAKER_SAMPLES
+                        ):
                             temp_audio = np.concatenate(audio_buffer)
                             temp_tensor = torch.from_numpy(temp_audio).float().unsqueeze(0)
                             
@@ -982,7 +1155,13 @@ async def websocket_endpoint(websocket: WebSocket):
                             
                             if is_verified:
                                 logger.info(f"⚡ [Barge-in] {spk_id} の声を検知！停止指示。")
-                                await websocket.send_json({"status": "interrupt", "message": "🛑 音声停止"})
+                                await websocket.send_json(
+                                    {
+                                        "status": "interrupt",
+                                        "message": "🛑 音声停止",
+                                        "turn_id": get_session_current_turn_id(chat_history),
+                                    }
+                                )
                                 interruption_triggered = True
 
     except WebSocketDisconnect:

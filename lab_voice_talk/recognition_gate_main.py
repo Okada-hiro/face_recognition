@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import importlib
 import json
 import os
@@ -63,6 +64,7 @@ WS_CLIENTS: set[WebSocket] = set()
 WS_CLIENTS_LOCK = asyncio.Lock()
 GREETING_PCM_CACHE: dict[str, bytes] = {}
 ENABLE_BARGE_IN = os.getenv("RECOGNITION_ENABLE_BARGE_IN", "1") == "1"
+ENABLE_SPEAKER_GUARD = os.getenv("RECOGNITION_ENABLE_SPEAKER_GUARD", "1") == "1"
 GREETING_TTS_WORKER_ID = int(os.getenv("RECOGNITION_GREETING_TTS_WORKER_ID", "0"))
 SESSION_RESET_EPOCH = 0
 DEFAULT_KNOWN_GREETING_TEMPLATE = (
@@ -127,10 +129,64 @@ NAME_CAPTURE_SYSTEM_PROMPT = """
 """
 
 NAME_GUIDANCE_FINALIZE_TIMEOUT_S = float(os.getenv("RECOGNITION_NAME_GUIDANCE_FINALIZE_TIMEOUT_S", "15"))
+TURN_COMMIT_DELAY_MS = int(os.getenv("RECOGNITION_TURN_COMMIT_DELAY_MS", "800"))
 
 
 class ApproachPayload(BaseModel):
     person_id: str | None = None
+
+
+@dataclass
+class BufferedTurnWebSocket:
+    real_websocket: WebSocket
+    buffered_events: list[tuple[str, object]] = field(default_factory=list)
+    committed: bool = False
+    aborted: bool = False
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+
+    async def send_json(self, payload: object) -> None:
+        async with self.lock:
+            if self.aborted:
+                return
+            if not self.committed:
+                self.buffered_events.append(("json", payload))
+                return
+        await self.real_websocket.send_json(payload)
+
+    async def send_bytes(self, payload: bytes) -> None:
+        async with self.lock:
+            if self.aborted:
+                return
+            if not self.committed:
+                self.buffered_events.append(("bytes", bytes(payload)))
+                return
+        await self.real_websocket.send_bytes(payload)
+
+    async def commit(self) -> None:
+        async with self.lock:
+            if self.aborted or self.committed:
+                return
+            self.committed = True
+            buffered = list(self.buffered_events)
+            self.buffered_events.clear()
+        for kind, payload in buffered:
+            if kind == "json":
+                await self.real_websocket.send_json(payload)
+            else:
+                await self.real_websocket.send_bytes(payload)
+
+    async def abort(self) -> None:
+        async with self.lock:
+            self.aborted = True
+            self.buffered_events.clear()
+
+
+@dataclass
+class PendingTurnState:
+    audio: np.ndarray
+    proxy: BufferedTurnWebSocket
+    process_task: asyncio.Task
+    commit_task: asyncio.Task
 
 
 @app.get("/api/tts-debug-files")
@@ -415,7 +471,7 @@ async def _handle_guided_name_capture(audio_float32_np, websocket: WebSocket) ->
 
     text = await _transcribe_audio_text(audio_float32_np)
     if not text:
-        await _broadcast_json({"status": "ignored", "message": "お名前が聞き取れませんでした。"})
+        await _broadcast_json({"status": "ignored", "message": "お名前が聞き取れませんでした。", "reason": "name_unheard"})
         return True
 
     await websocket.send_json({
@@ -517,9 +573,24 @@ async def _handle_guided_name_capture(audio_float32_np, websocket: WebSocket) ->
     return True
 
 
+async def _run_turn_pipeline(audio_float32_np, websocket_like, session_state, sample_rate: int) -> None:
+    await websocket_like.send_json({"status": "processing", "message": "🧠 AI思考中..."})
+    pipeline_start = time.perf_counter()
+    handled_by_name_guide = await _handle_guided_name_capture(audio_float32_np, websocket_like)
+    if not handled_by_name_guide:
+        await base.process_voice_pipeline(audio_float32_np, websocket_like, session_state)
+    base.logger.info(
+        "[GATE_PIPELINE] process_voice_pipeline_done samples=%d duration_s=%.2f total_ms=%.1f",
+        len(audio_float32_np),
+        len(audio_float32_np) / sample_rate,
+        (time.perf_counter() - pipeline_start) * 1000.0,
+    )
+
+
 async def _speak_text_to_websocket(websocket: WebSocket, text: str, spoken_text: str | None = None) -> None:
     display_text = (text or "").strip()
     tts_text = (spoken_text or "").strip() or display_text
+    turn_id = int(time.time() * 1000)
     greet_start = time.perf_counter()
     worker_id = _resolve_greeting_worker_id()
     model_snapshot = _get_tts_snapshot(worker_id)
@@ -551,10 +622,11 @@ async def _speak_text_to_websocket(websocket: WebSocket, text: str, spoken_text:
     if not pcm_bytes:
         return
     send_start = time.perf_counter()
-    await websocket.send_json({"status": "reply_chunk", "text_chunk": display_text})
+    await websocket.send_json({"status": "reply_chunk", "turn_id": turn_id, "text_chunk": display_text})
     await websocket.send_json(
         {
             "status": "audio_chunk_meta",
+            "turn_id": turn_id,
             "sentence_id": 1,
             "chunk_id": 1,
             "global_chunk_id": 1,
@@ -564,8 +636,10 @@ async def _speak_text_to_websocket(websocket: WebSocket, text: str, spoken_text:
         }
     )
     await websocket.send_bytes(pcm_bytes)
-    await websocket.send_json({"status": "audio_sentence_done", "sentence_id": 1, "last_chunk_id": 1, "total_bytes": len(pcm_bytes)})
-    await websocket.send_json({"status": "complete", "answer_text": display_text})
+    await websocket.send_json(
+        {"status": "audio_sentence_done", "turn_id": turn_id, "sentence_id": 1, "last_chunk_id": 1, "total_bytes": len(pcm_bytes)}
+    )
+    await websocket.send_json({"status": "complete", "turn_id": turn_id, "answer_text": display_text})
     send_ms = (time.perf_counter() - send_start) * 1000.0
     total_ms = (time.perf_counter() - greet_start) * 1000.0
     base.logger.info(
@@ -700,12 +774,6 @@ async def _handle_face_recognition(person_id: str | None, known_face: bool, pers
         _clear_name_guidance_state()
     await _broadcast_greeting(person_id if known_face else None, known_face, person_reading if known_face else None)
     if not known_face:
-        await _broadcast_json(
-            {
-                "status": "registration_prompt",
-                "message": "はじめての方は、お名前を入力すると顔を登録できます。",
-            }
-        )
         if ENABLE_GUIDED_NAME_CAPTURE and not NAME_CAPTURE_UI_FIRST:
             _clear_name_guidance_state()
             NAME_GUIDANCE.active = True
@@ -799,6 +867,7 @@ async def startup_diagnostics() -> None:
         worker_id,
         _get_tts_model_count(),
     )
+    base.logger.info("[SPEAKER_GUARD] enabled=%s", ENABLE_SPEAKER_GUARD)
     if worker_id is None:
         return
     greeting_text = UNKNOWN_GREETING_TEXT
@@ -851,7 +920,7 @@ async def websocket_endpoint(websocket: WebSocket):
         base.vad_model,
         threshold=0.95,
         sampling_rate=16000,
-        min_silence_duration_ms=200,
+        min_silence_duration_ms=800,
         speech_pad_ms=50,
     )
 
@@ -867,6 +936,57 @@ async def websocket_endpoint(websocket: WebSocket):
     check_speaker_samples = 30000
     session_state = _create_voice_session_state()
     session_reset_epoch = SESSION_RESET_EPOCH
+    pending_turn: PendingTurnState | None = None
+
+    async def _discard_pending_turn(reason: str) -> np.ndarray | None:
+        nonlocal pending_turn
+        current = pending_turn
+        pending_turn = None
+        if current is None:
+            return None
+        base.logger.info(
+            "[TURN_BUFFER] discard reason=%s buffered_samples=%d committed=%s",
+            reason,
+            len(current.audio),
+            current.proxy.committed,
+        )
+        await current.proxy.abort()
+        current.commit_task.cancel()
+        current.process_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await current.commit_task
+        return current.audio
+
+    def _start_pending_turn(full_audio: np.ndarray) -> None:
+        nonlocal pending_turn
+        proxy = BufferedTurnWebSocket(websocket)
+
+        async def _commit_after_delay(expected_proxy: BufferedTurnWebSocket) -> None:
+            nonlocal pending_turn
+            await asyncio.sleep(max(0, TURN_COMMIT_DELAY_MS) / 1000.0)
+            if pending_turn is None or pending_turn.proxy is not expected_proxy:
+                return
+            base.logger.info(
+                "[TURN_BUFFER] commit buffered_samples=%d delay_ms=%d",
+                len(full_audio),
+                TURN_COMMIT_DELAY_MS,
+            )
+            await expected_proxy.commit()
+            pending_turn = None
+
+        process_task = asyncio.create_task(_run_turn_pipeline(full_audio, proxy, session_state, sample_rate))
+        commit_task = asyncio.create_task(_commit_after_delay(proxy))
+        pending_turn = PendingTurnState(
+            audio=full_audio,
+            proxy=proxy,
+            process_task=process_task,
+            commit_task=commit_task,
+        )
+        base.logger.info(
+            "[TURN_BUFFER] start buffered_samples=%d delay_ms=%d",
+            len(full_audio),
+            TURN_COMMIT_DELAY_MS,
+        )
 
     try:
         await websocket.send_json({"status": "system_info", "message": "認識システムからの接近待ちです。"})
@@ -878,6 +998,7 @@ async def websocket_endpoint(websocket: WebSocket):
             if data_text is not None:
                 await _handle_control_message(websocket, data_text)
                 if session_reset_epoch != SESSION_RESET_EPOCH:
+                    await _discard_pending_turn("session_reset")
                     session_state = _create_voice_session_state()
                     session_reset_epoch = SESSION_RESET_EPOCH
                 continue
@@ -885,6 +1006,7 @@ async def websocket_endpoint(websocket: WebSocket):
             if data_bytes is None:
                 continue
             if session_reset_epoch != SESSION_RESET_EPOCH:
+                await _discard_pending_turn("session_reset")
                 session_state = _create_voice_session_state()
                 session_reset_epoch = SESSION_RESET_EPOCH
             binary_chunk_count += 1
@@ -919,9 +1041,12 @@ async def websocket_endpoint(websocket: WebSocket):
                 if speech_dict:
                     if "start" in speech_dict:
                         base.logger.info("🗣️ Speech START")
+                        merged_audio = None
+                        if pending_turn is not None and not pending_turn.proxy.committed:
+                            merged_audio = await _discard_pending_turn("speech_resumed")
                         is_speaking = True
                         interruption_triggered = False
-                        audio_buffer = [window_np]
+                        audio_buffer = [merged_audio, window_np] if merged_audio is not None else [window_np]
                         await websocket.send_json({"status": "processing", "message": "👂 聞いています..."})
                     elif "end" in speech_dict:
                         base.logger.info("🤫 Speech END")
@@ -932,19 +1057,15 @@ async def websocket_endpoint(websocket: WebSocket):
 
                             if len(full_audio) / sample_rate < 0.2:
                                 base.logger.info("Noise detected")
-                                await websocket.send_json({"status": "ignored", "message": "会話が短すぎます。"})
-                            else:
-                                await websocket.send_json({"status": "processing", "message": "🧠 AI思考中..."})
-                                pipeline_start = time.perf_counter()
-                                handled_by_name_guide = await _handle_guided_name_capture(full_audio, websocket)
-                                if not handled_by_name_guide:
-                                    await base.process_voice_pipeline(full_audio, websocket, session_state)
-                                base.logger.info(
-                                    "[GATE_PIPELINE] process_voice_pipeline_done samples=%d duration_s=%.2f total_ms=%.1f",
-                                    len(full_audio),
-                                    len(full_audio) / sample_rate,
-                                    (time.perf_counter() - pipeline_start) * 1000.0,
+                                await websocket.send_json(
+                                    {
+                                        "status": "ignored",
+                                        "message": "音声が短すぎます。",
+                                        "reason": "noise_short",
+                                    }
                                 )
+                            else:
+                                _start_pending_turn(full_audio)
                             audio_buffer = []
                 else:
                     if is_speaking:
@@ -952,6 +1073,7 @@ async def websocket_endpoint(websocket: WebSocket):
                         current_len = sum(len(c) for c in audio_buffer)
                         if (
                             ENABLE_BARGE_IN
+                            and ENABLE_SPEAKER_GUARD
                             and not interruption_triggered
                             and not _get_next_audio_is_registration()
                             and current_len > check_speaker_samples
@@ -970,7 +1092,12 @@ async def websocket_endpoint(websocket: WebSocket):
                             )
                             if is_verified:
                                 base.logger.info(f"⚡ [Barge-in] {spk_id} の声を検知！停止指示。")
-                                await websocket.send_json({"status": "interrupt", "message": "🛑 音声停止"})
+                                current_turn_id = None
+                                if hasattr(base, "get_session_current_turn_id"):
+                                    current_turn_id = base.get_session_current_turn_id(session_state)
+                                await websocket.send_json(
+                                    {"status": "interrupt", "message": "🛑 音声停止", "turn_id": current_turn_id}
+                                )
                                 interruption_triggered = True
 
     except WebSocketDisconnect:
@@ -978,6 +1105,7 @@ async def websocket_endpoint(websocket: WebSocket):
     except Exception as exc:
         base.logger.error(f"[WS ERROR] {exc}", exc_info=True)
     finally:
+        await _discard_pending_turn("websocket_closed")
         vad_iterator.reset_states()
         async with WS_CLIENTS_LOCK:
             WS_CLIENTS.discard(websocket)

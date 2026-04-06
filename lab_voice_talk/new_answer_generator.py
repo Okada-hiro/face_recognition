@@ -2,7 +2,12 @@
 
 
 import google.generativeai as genai
+import io
+import json
 import os
+import wave
+
+import numpy as np
 
 # Google (Gemini)
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
@@ -81,8 +86,30 @@ user: 「じゃあ、そこに行こう。あそこは紅茶が美味しいん�
 
 """
 # モデル名 (確実に動作するもの)
-DEFAULT_MODEL = "gemini-2.5-flash-lite"
+DEFAULT_MODEL = "gemini-3.1-flash-lite-preview"
+DEFAULT_AUDIO_MODEL = os.getenv("RECOGNITION_GEMINI_AUDIO_MODEL", "gemini-3.1-flash-lite-preview")
 FALLBACK_MESSAGE = "おでんわ、ありがとうございます。こちらは、ほけんがいしゃです。たんとうに、おつなぎします。"
+MULTIMODAL_JSON_PROMPT = """
+あなたは音声会話の聞き手AIです。
+案内役の説明（音声）を聞き取り、内容を transcript と、それに対する適切な相槌または質問 answer を返してください。
+
+必ず守ること:
+- 出力は JSON のみ: {"transcript":"...", "answer":"..."}
+- transcript: 聞き取れた内容を日本語テキストにする
+- answer: 
+    - 基本は「わかりました。」「〜なのですね。」などの短い相槌。
+    - 説明が不十分な場合は「それはどのあたりですか？」「具体的にはどのように使いますか？」等の質問。
+    - 不要な発話なら "[SILENCE]"。
+- answer に話者名やタグを含めない。
+
+入力判定（SILENCE判定）
+以下の場合は補完せず **[SILENCE]** のみ出力する。
+
+- 「あー」「えーと」「んー」などのフィラーのみ
+- AIに向けていない独り言・雑談（例：「これ高いな」「ちょっと待って」など）
+- 語として意味をなさず、意図の解釈が不可能な文字列
+
+"""
 
 
 def _fallback_stream(message: str = FALLBACK_MESSAGE):
@@ -90,6 +117,98 @@ def _fallback_stream(message: str = FALLBACK_MESSAGE):
     step = 12
     for i in range(0, len(message), step):
         yield message[i:i + step]
+
+
+def _history_to_text(history: list | None, limit: int = 8) -> str:
+    if not history:
+        return ""
+    lines = []
+    for item in history[-limit:]:
+        role = str(item.get("role", "")).strip() or "user"
+        parts = item.get("parts") or []
+        text = "".join(str(part) for part in parts if part is not None).strip()
+        if text:
+            lines.append(f"{role}: {text}")
+    return "\n".join(lines)
+
+
+def _extract_first_json_object(text: str) -> dict | None:
+    raw = str(text or "").strip()
+    if not raw:
+        return None
+    try:
+        parsed = json.loads(raw)
+        return parsed if isinstance(parsed, dict) else None
+    except Exception:
+        pass
+    start = raw.find("{")
+    while start != -1:
+        depth = 0
+        for idx in range(start, len(raw)):
+            ch = raw[idx]
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    candidate = raw[start : idx + 1]
+                    try:
+                        parsed = json.loads(candidate)
+                        return parsed if isinstance(parsed, dict) else None
+                    except Exception:
+                        break
+        start = raw.find("{", start + 1)
+    return None
+
+
+def _audio_float32_to_wav_bytes(audio_float32_np) -> bytes:
+    audio_np = np.asarray(audio_float32_np, dtype=np.float32).reshape(-1)
+    audio_np = np.clip(audio_np, -1.0, 1.0)
+    pcm16 = (audio_np * 32767.0).astype(np.int16)
+    buffer = io.BytesIO()
+    with wave.open(buffer, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(16000)
+        wf.writeframes(pcm16.tobytes())
+    return buffer.getvalue()
+
+
+def generate_answer_from_audio(audio_float32_np, history: list | None = None, model: str = DEFAULT_AUDIO_MODEL) -> dict:
+    if history is None:
+        history = []
+    if not GOOGLE_API_KEY:
+        raise ValueError("GOOGLE_API_KEY が設定されていません")
+
+    wav_bytes = _audio_float32_to_wav_bytes(audio_float32_np)
+    history_text = _history_to_text(history)
+    prompt = MULTIMODAL_JSON_PROMPT
+    if history_text:
+        prompt = f"{prompt}\n\n会話履歴:\n{history_text}"
+
+    model_instance = genai.GenerativeModel(
+        model_name=model,
+        system_instruction=SYSTEM_PROMPT,
+        generation_config={"temperature": 0.2},
+    )
+    response = model_instance.generate_content(
+        [
+            prompt,
+            {"mime_type": "audio/wav", "data": wav_bytes},
+        ]
+    )
+    raw_text = getattr(response, "text", "") or ""
+    parsed = _extract_first_json_object(raw_text)
+    if not parsed:
+        raise ValueError(f"Gemini audio response JSON parse failed: {raw_text!r}")
+    transcript = str(parsed.get("transcript") or "").strip()
+    answer = str(parsed.get("answer") or "").strip()
+    return {
+        "transcript": transcript,
+        "answer": answer,
+        "raw_text": raw_text,
+        "model": model,
+    }
 
 def generate_answer_stream(question: str, model=DEFAULT_MODEL, history: list = None):
     """

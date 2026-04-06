@@ -251,10 +251,14 @@ const runtime = {
   audioQueue: [],
   sentenceDoneMap: new Map(),
   pendingOrderedAudio: new Map(),
+  discardedTurnIds: new Set(),
+  activeReplyTurnId: null,
+  activeAudioTurnId: null,
   expectedSentenceId: 1,
   expectedChunkId: 1,
   nextStartTime: 0,
   currentSourceNode: null,
+  scheduledSourceNodes: new Set(),
   lastFeedObjectUrl: null,
   jitterPrimed: false,
   pendingGreeting: false,
@@ -313,18 +317,19 @@ function setRegistrationStatus(message = "", tone = "") {
 }
 
 function showRegistrationPrompt(message = "お名前を入力すると、いま見えている顔をデータベースへ追加します。") {
-  if (!registrationCard) return;
   runtime.registrationPromptVisible = true;
+  runtime.registrationMode = "hidden";
+  setRegistrationStatus("");
+  if (!registrationCard) return;
   registrationCard.hidden = false;
   setRegistrationMode("choice", message);
-  setRegistrationStatus("");
 }
 
 function hideRegistrationPrompt() {
-  if (!registrationCard) return;
   runtime.registrationPromptVisible = false;
   runtime.registrationSubmitting = false;
   runtime.registrationMode = "hidden";
+  if (!registrationCard) return;
   registrationCard.hidden = true;
   screenEl?.classList.remove("is-registration-mode");
   if (registrationForm) {
@@ -344,9 +349,9 @@ function hideRegistrationPrompt() {
 }
 
 function setRegistrationMode(mode, message = "") {
-  if (!registrationCard) return;
   runtime.registrationMode = mode;
   runtime.registrationPromptVisible = mode !== "hidden";
+  if (!registrationCard) return;
   registrationCard.hidden = mode === "hidden";
   registrationCard.dataset.mode = mode;
   if (registrationCopy) {
@@ -450,14 +455,24 @@ function getRegistrationPayloadFromInputs() {
 
 function normalizeDialogueNote(status, data = {}) {
   const rawMessage = String(data.message || "").trim();
+  const reason = String(data.reason || "").trim();
   if (status === "ignored") {
-    return { text: "音声が短すぎます。もう少し長く話してください。", tone: "warning" };
+    if (reason === "noise_short") {
+      return { text: "音声が短すぎます。もう少し長く話してください。", tone: "warning" };
+    }
+    if (reason === "name_unheard") {
+      return { text: "お名前が聞き取れませんでした。", tone: "warning" };
+    }
+    if (reason === "irrelevant") {
+      return { text: "会話に関係ない内容と判断しました。", tone: "warning" };
+    }
+    return { text: rawMessage || "入力を確認できませんでした。", tone: "warning" };
   }
   if (status === "system_alert") {
     if (data.alert_type === "unregistered" || rawMessage.includes("外部の会話") || rawMessage.includes("未登録")) {
       return { text: "他の人の声だと認識しました。", tone: "danger" };
     }
-    if (rawMessage.includes("会話外")) {
+    if (data.alert_type === "irrelevant" || reason === "short_unverified_audio" || rawMessage.includes("会話外")) {
       return { text: "会話に関係ない音声として扱いました。", tone: "warning" };
     }
     if (rawMessage) {
@@ -730,11 +745,12 @@ function scheduleNextFrame(delayMs) {
   runtime.frameTimerId = window.setTimeout(captureAndSendFrame, delayMs);
 }
 
-function resetOrderedAudioState() {
+function resetOrderedAudioState(nextTurnId = null) {
   runtime.audioMetaQueue = [];
   runtime.audioQueue = [];
   runtime.pendingOrderedAudio.clear();
   runtime.sentenceDoneMap.clear();
+  runtime.activeAudioTurnId = nextTurnId;
   runtime.expectedSentenceId = 1;
   runtime.expectedChunkId = 1;
   runtime.nextStartTime = runtime.audioContext ? runtime.audioContext.currentTime : 0;
@@ -742,13 +758,31 @@ function resetOrderedAudioState() {
   runtime.currentSourceNode = null;
 }
 
-function makeChunkKey(sentenceId, chunkId) {
-  return `${sentenceId}:${chunkId}`;
+function makeChunkKey(turnId, sentenceId, chunkId) {
+  return `${turnId}:${sentenceId}:${chunkId}`;
+}
+
+function makeSentenceDoneKey(turnId, sentenceId) {
+  return `${turnId}:${sentenceId}`;
+}
+
+function rememberDiscardedTurn(turnId) {
+  if (!Number.isFinite(turnId) || turnId <= 0) return;
+  runtime.discardedTurnIds.add(turnId);
+  if (runtime.discardedTurnIds.size > 24) {
+    const oldest = runtime.discardedTurnIds.values().next().value;
+    if (oldest !== undefined) {
+      runtime.discardedTurnIds.delete(oldest);
+    }
+  }
 }
 
 function flushOrderedAudio() {
+  if (!Number.isFinite(runtime.activeAudioTurnId) || runtime.activeAudioTurnId <= 0) {
+    return;
+  }
   while (true) {
-    const key = makeChunkKey(runtime.expectedSentenceId, runtime.expectedChunkId);
+    const key = makeChunkKey(runtime.activeAudioTurnId, runtime.expectedSentenceId, runtime.expectedChunkId);
     const nextPacket = runtime.pendingOrderedAudio.get(key);
     if (nextPacket) {
       runtime.pendingOrderedAudio.delete(key);
@@ -757,7 +791,7 @@ function flushOrderedAudio() {
       processAudioQueue();
       continue;
     }
-    const doneInfo = runtime.sentenceDoneMap.get(runtime.expectedSentenceId);
+    const doneInfo = runtime.sentenceDoneMap.get(makeSentenceDoneKey(runtime.activeAudioTurnId, runtime.expectedSentenceId));
     if (doneInfo && runtime.expectedChunkId > doneInfo.lastChunkId) {
       runtime.expectedSentenceId += 1;
       runtime.expectedChunkId = 1;
@@ -768,7 +802,20 @@ function flushOrderedAudio() {
 }
 
 function queueOrderedChunk(meta, rawBytes) {
-  runtime.pendingOrderedAudio.set(makeChunkKey(meta.sentence_id, meta.chunk_id), {
+  const turnId = Number(meta?.turn_id || 0);
+  if (!Number.isFinite(turnId) || turnId <= 0) {
+    return;
+  }
+  if (runtime.discardedTurnIds.has(turnId)) {
+    return;
+  }
+  if (!Number.isFinite(runtime.activeAudioTurnId) || runtime.activeAudioTurnId == null || turnId > runtime.activeAudioTurnId) {
+    resetOrderedAudioState(turnId);
+  }
+  if (turnId < runtime.activeAudioTurnId) {
+    return;
+  }
+  runtime.pendingOrderedAudio.set(makeChunkKey(turnId, meta.sentence_id, meta.chunk_id), {
     meta,
     rawBytes,
     enqueuedAt: performance.now(),
@@ -783,15 +830,20 @@ function getBufferedAudioMs() {
   }, 0);
 }
 
-function stopAudioPlayback() {
-  if (runtime.currentSourceNode) {
+function stopAudioPlayback(turnId = null) {
+  if (Number.isFinite(turnId) && turnId > 0) {
+    rememberDiscardedTurn(turnId);
+  }
+  for (const source of Array.from(runtime.scheduledSourceNodes)) {
     try {
-      runtime.currentSourceNode.stop();
+      source.stop();
     } catch (error) {
       console.debug(error);
     }
   }
-  resetOrderedAudioState();
+  runtime.scheduledSourceNodes.clear();
+  runtime.currentSourceNode = null;
+  resetOrderedAudioState(null);
 }
 
 async function processAudioQueue() {
@@ -816,6 +868,13 @@ async function processAudioQueue() {
       if (runtime.nextStartTime < runtime.audioContext.currentTime) {
         runtime.nextStartTime = runtime.audioContext.currentTime;
       }
+      runtime.scheduledSourceNodes.add(source);
+      source.onended = () => {
+        runtime.scheduledSourceNodes.delete(source);
+        if (runtime.currentSourceNode === source) {
+          runtime.currentSourceNode = null;
+        }
+      };
       source.start(runtime.nextStartTime);
       runtime.currentSourceNode = source;
       runtime.nextStartTime += audioBuffer.duration;
@@ -841,11 +900,14 @@ async function connectVoiceSocket() {
   socket.onmessage = async (event) => {
     if (event.data instanceof ArrayBuffer) {
       const meta = runtime.audioMetaQueue.shift();
-      if (meta) {
+      if (meta && !runtime.discardedTurnIds.has(Number(meta.turn_id || 0))) {
         queueOrderedChunk(meta, event.data);
       } else {
-        runtime.audioQueue.push({ meta: null, rawBytes: event.data, enqueuedAt: performance.now() });
-        processAudioQueue();
+        const fallbackTurnId = Number(meta?.turn_id || 0);
+        if (!fallbackTurnId || !runtime.discardedTurnIds.has(fallbackTurnId)) {
+          runtime.audioQueue.push({ meta: meta || null, rawBytes: event.data, enqueuedAt: performance.now() });
+          processAudioQueue();
+        }
       }
       return;
     }
@@ -867,26 +929,18 @@ async function connectVoiceSocket() {
       }
       showDialogueNote("");
     } else if (data.status === "registration_prompt") {
-      const message = String(data.message || "").trim();
-      showRegistrationPrompt(message || "お名前を入力すると、いま見えている顔をデータベースへ追加します。");
-      showDialogueNote(message || "はじめての方ですか？", "warning");
+      hideRegistrationPrompt();
+      showDialogueNote("");
     } else if (data.status === "registration_candidate") {
       const message = String(data.message || "").trim();
-      const personId = String(data.person_id || "").trim();
-      const personReading = String(data.person_reading || "").trim();
-      setRegistrationMode("existing", message || "登録済みのお名前を漢字で入力してください。");
-      fillRegistrationInputs(personId, personReading);
-      if (personReading) {
-        runtime.recognizedPersonReading = personReading;
-      }
-      showDialogueNote(message || "お名前を確認しています。", "warning");
+      hideRegistrationPrompt();
+      showDialogueNote(message || "登録済み候補を確認しています。", "warning");
     } else if (data.status === "registration_commit") {
       const personId = String(data.person_id || "").trim();
       const personReading = String(data.person_reading || "").trim();
+      hideRegistrationPrompt();
       if (personId) {
-        fillRegistrationInputs(personId, personReading);
-        setRegistrationStatus(`${personId}さんとして登録しています…`);
-        setRegistrationMode("new", "確認した内容で顔データを登録しています。");
+        showDialogueNote(`${personId}さんとして登録しています。`, "warning");
         await performFaceRegistration({
           person_id: personId,
           person_reading: personReading,
@@ -903,17 +957,58 @@ async function connectVoiceSocket() {
       runtime.thinking = true;
       showDialogueNote("");
     } else if (data.status === "reply_chunk") {
+      const turnId = Number(data.turn_id || 0);
+      if (turnId && runtime.discardedTurnIds.has(turnId)) {
+        refreshVisualState();
+        return;
+      }
+      if (turnId && (!runtime.activeReplyTurnId || turnId > runtime.activeReplyTurnId)) {
+        runtime.activeReplyTurnId = turnId;
+        runtime.currentAiBubbleText = "";
+      } else if (turnId && runtime.activeReplyTurnId && turnId < runtime.activeReplyTurnId) {
+        refreshVisualState();
+        return;
+      }
       runtime.speaking = true;
       runtime.thinking = false;
       runtime.currentAiBubbleText += data.text_chunk || "";
       runtime.latestAiText = runtime.currentAiBubbleText;
       showDialogueNote("");
     } else if (data.status === "audio_chunk_meta") {
+      const turnId = Number(data.turn_id || 0);
+      if (!turnId || runtime.discardedTurnIds.has(turnId)) {
+        refreshVisualState();
+        return;
+      }
       runtime.audioMetaQueue.push(data);
     } else if (data.status === "audio_sentence_done") {
-      runtime.sentenceDoneMap.set(data.sentence_id, { lastChunkId: data.last_chunk_id });
+      const turnId = Number(data.turn_id || 0);
+      if (!turnId || runtime.discardedTurnIds.has(turnId)) {
+        refreshVisualState();
+        return;
+      }
+      if (!runtime.activeAudioTurnId || turnId > runtime.activeAudioTurnId) {
+        resetOrderedAudioState(turnId);
+      }
+      if (turnId < runtime.activeAudioTurnId) {
+        refreshVisualState();
+        return;
+      }
+      runtime.sentenceDoneMap.set(makeSentenceDoneKey(turnId, data.sentence_id), { lastChunkId: data.last_chunk_id });
       flushOrderedAudio();
     } else if (data.status === "complete") {
+      const turnId = Number(data.turn_id || 0);
+      if (turnId && runtime.discardedTurnIds.has(turnId)) {
+        if (turnId === runtime.activeAudioTurnId) {
+          resetOrderedAudioState(null);
+        }
+        refreshVisualState();
+        return;
+      }
+      if (turnId && runtime.activeReplyTurnId && turnId < runtime.activeReplyTurnId) {
+        refreshVisualState();
+        return;
+      }
       runtime.speaking = false;
       runtime.thinking = false;
       runtime.listening = false;
@@ -921,12 +1016,20 @@ async function connectVoiceSocket() {
         runtime.latestAiText = data.answer_text;
       }
       runtime.currentAiBubbleText = "";
-      resetOrderedAudioState();
+      runtime.activeReplyTurnId = null;
+      if (!turnId || turnId === runtime.activeAudioTurnId) {
+        resetOrderedAudioState(null);
+      }
       if (!runtime.registrationPromptVisible) {
         showDialogueNote("");
       }
     } else if (data.status === "interrupt") {
-      stopAudioPlayback();
+      const interruptedTurnId = Number(data.turn_id || 0);
+      if (interruptedTurnId && runtime.activeReplyTurnId === interruptedTurnId) {
+        runtime.activeReplyTurnId = null;
+        runtime.currentAiBubbleText = "";
+      }
+      stopAudioPlayback(interruptedTurnId || null);
       runtime.speaking = false;
     } else if (data.status === "ignored") {
       runtime.listening = false;

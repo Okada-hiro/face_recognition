@@ -29,12 +29,74 @@ FRAME_INDEX = 0
 APPROACH_SENT = False
 PREVIEW_MODE = "unknown"
 PREVIEW_PERSON_ID = "田中"
+PREVIEW_PERSON_READING = "たなか"
 PREVIEW_CENTER_X = 0.68
 PREVIEW_CENTER_Y = 0.42
+PREVIEW_FACE_DATABASE = [
+    {
+        "person_id": "岡田寛章",
+        "person_reading": "おかだひろあき",
+        "person_last_name": "岡田",
+        "person_first_name": "寛章",
+        "person_last_reading": "おかだ",
+        "person_first_reading": "ひろあき",
+        "image_count": 3,
+    },
+    {
+        "person_id": "田中花子",
+        "person_reading": "たなかはなこ",
+        "person_last_name": "田中",
+        "person_first_name": "花子",
+        "person_last_reading": "たなか",
+        "person_first_reading": "はなこ",
+        "image_count": 2,
+    },
+]
 
 
 class FaceRegistrationPayload(BaseModel):
-    person_id: str
+    person_id: str = ""
+    person_reading: str = ""
+    person_last_name: str = ""
+    person_first_name: str = ""
+    person_last_reading: str = ""
+    person_first_reading: str = ""
+
+
+def _normalize_text(value: str | None) -> str:
+    return str(value or "").strip()
+
+
+def _compose_person_id(payload: FaceRegistrationPayload) -> str:
+    last_name = _normalize_text(payload.person_last_name)
+    first_name = _normalize_text(payload.person_first_name)
+    combined = f"{last_name}{first_name}".strip()
+    return combined or _normalize_text(payload.person_id)
+
+
+def _compose_person_reading(payload: FaceRegistrationPayload) -> str:
+    last_reading = _normalize_text(payload.person_last_reading)
+    first_reading = _normalize_text(payload.person_first_reading)
+    combined = f"{last_reading}{first_reading}".strip()
+    return combined or _normalize_text(payload.person_reading)
+
+
+def _split_name(full_name: str) -> tuple[str, str]:
+    clean = _normalize_text(full_name)
+    if not clean:
+        return "", ""
+    return clean[: len(clean) // 2], clean[len(clean) // 2 :]
+
+
+def _upsert_preview_face_row(row: dict[str, object]) -> None:
+    person_id = str(row.get("person_id") or "").strip()
+    if not person_id:
+        return
+    for index, existing in enumerate(PREVIEW_FACE_DATABASE):
+        if str(existing.get("person_id") or "").strip() == person_id:
+            PREVIEW_FACE_DATABASE[index] = row
+            return
+    PREVIEW_FACE_DATABASE.append(row)
 
 
 def _html_response(html_text: str) -> HTMLResponse:
@@ -63,6 +125,7 @@ def _inject_runtime_config(html_text: str, request: Request) -> str:
     config = {
         "visionHttpBase": str(request.base_url).rstrip("/"),
         "voiceWsUrl": "/ws",
+        "previewModeControls": True,
     }
     config_json = json.dumps(config, ensure_ascii=False)
     script = f'<script>window.RECEPTION_CONFIG = {config_json};</script>'
@@ -152,11 +215,40 @@ async def live_frame(frame: UploadFile = File(...)) -> Response:
 
 @app.post("/api/register-face")
 async def register_face(payload: FaceRegistrationPayload) -> JSONResponse:
-    global PREVIEW_MODE, PREVIEW_PERSON_ID
-    PREVIEW_PERSON_ID = payload.person_id.strip() or PREVIEW_PERSON_ID
+    global PREVIEW_MODE, PREVIEW_PERSON_ID, PREVIEW_PERSON_READING
+
+    person_id = _compose_person_id(payload) or PREVIEW_PERSON_ID
+    person_reading = _compose_person_reading(payload) or PREVIEW_PERSON_READING
+    last_name = _normalize_text(payload.person_last_name)
+    first_name = _normalize_text(payload.person_first_name)
+    if not last_name and not first_name:
+        last_name, first_name = _split_name(person_id)
+    last_reading = _normalize_text(payload.person_last_reading)
+    first_reading = _normalize_text(payload.person_first_reading)
+    if not last_reading and not first_reading:
+        last_reading, first_reading = _split_name(person_reading)
+
+    PREVIEW_PERSON_ID = person_id
+    PREVIEW_PERSON_READING = person_reading
     PREVIEW_MODE = "recognized"
-    logger.info("[UI_PREVIEW] registered person_id=%s", PREVIEW_PERSON_ID)
-    return JSONResponse({"ok": True, "person_id": PREVIEW_PERSON_ID})
+    row = {
+        "person_id": person_id,
+        "person_reading": person_reading,
+        "person_last_name": last_name,
+        "person_first_name": first_name,
+        "person_last_reading": last_reading,
+        "person_first_reading": first_reading,
+        "image_count": 1,
+    }
+    _upsert_preview_face_row(row)
+    logger.info("[UI_PREVIEW] registered person_id=%s person_reading=%s", PREVIEW_PERSON_ID, PREVIEW_PERSON_READING)
+    return JSONResponse({"ok": True, **row})
+
+
+@app.get("/api/face-database")
+async def face_database() -> JSONResponse:
+    rows = sorted(PREVIEW_FACE_DATABASE, key=lambda row: str(row.get("person_id") or ""))
+    return JSONResponse({"ok": True, "rows": rows})
 
 
 @app.post("/api/preview-mode/{mode}")
